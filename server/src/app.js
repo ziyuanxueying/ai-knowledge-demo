@@ -1,7 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import chatRouter from './routes/chat.js';
 import agentRouter from './routes/agent.js';
 import knowledgeRouter from './routes/knowledge.js';
@@ -9,11 +7,6 @@ import historyRouter from './routes/history.js';
 import promptsRouter from './routes/prompts.js';
 import compareRouter from './routes/compare.js';
 import { config } from './config/index.js';
-
-// 当前文件所在目录（server/src/），用于定位前端构建产物
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// 前端构建产物目录：server/src → 上两级到项目根 → client/dist
-const CLIENT_DIST = path.join(__dirname, '..', '..', 'client', 'dist');
 
 const app = express();
 
@@ -44,15 +37,21 @@ app.use('/api/history', historyRouter);
 app.use('/api/prompts', promptsRouter);
 app.use('/api/compare', compareRouter);
 
-// ===== 前端静态文件托管（生产环境：client 构建产物由 Express 直接提供）=====
-// express.static 会自动把 / 映射到 index.html，并提供 /assets/* 等静态资源
-app.use(express.static(CLIENT_DIST));
-
-// SPA 路由回退：所有非 /api 的 GET 请求都返回 index.html，
-// 让前端（React）接管路由，避免刷新页面 404
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api')) return next();
-  res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+// 根路由
+app.get('/', (req, res) => {
+  res.json({
+    name: '前端开发知识库 API',
+    version: '1.0.0',
+    endpoints: {
+      chat: 'POST /api/chat',
+      agent: 'POST /api/agent',
+      knowledge: 'GET/POST/PUT/DELETE /api/knowledge',
+      quickQuestions: 'GET /api/chat/quick-questions',
+      history: 'GET /api/history',
+      prompts: 'GET/PUT /api/prompts',
+      health: 'GET /api/health',
+    },
+  });
 });
 
 // 全局错误处理
