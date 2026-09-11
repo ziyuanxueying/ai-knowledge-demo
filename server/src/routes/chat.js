@@ -144,10 +144,19 @@ router.post('/', async (req, res) => {
     let fullContent = ''
     let usage = null
 
-    // 支持客户端中断（用户点击"停止"按钮）——前端通过断开 fetch 连接实现
-    // 这里的 signal 会在读取流过程中响应客户端断开
+    // 支持客户端中断（用户点击"停止"按钮 / 关闭页面）：
+    // 前端断开 fetch 连接会触发 res 的 close 事件，此时 abort 上游模型请求，
+    // 否则后端到通义千问的请求仍会跑完，token 照常计费。
+    const controller = new AbortController()
+    let finished = false
+    // 注意：不能用 req.on('close')，它会在请求体读完后立即触发，导致提前中断。
+    // 用 res.on('close') 并加 finished 守卫，仅响应客户端真实断开。
+    res.on('close', () => {
+      if (!finished) controller.abort()
+    })
+
     try {
-      const stream = streamChat(messages, undefined, sampleParams)
+      const stream = streamChat(messages, controller.signal, sampleParams)
       for await (const chunk of stream) {
         if (chunk.type === 'content') {
           fullContent += chunk.content
@@ -164,19 +173,25 @@ router.post('/', async (req, res) => {
         err.code === 'ERR_STREAM_PREMATURE_CLOSE' ||
         err.code === 'EPIPE'
       ) {
-        res.write(`data: ${JSON.stringify({ type: 'aborted' })}\n\n`)
+        finished = true
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ type: 'aborted' })}\n\n`)
+        }
       } else {
         throw err
       }
     }
 
-    // 6. 把 AI 完整回复存入历史
+    // 6. 把 AI 完整回复存入历史（中断时也保存已生成的部分内容）
     appendMessage(session.id, { role: 'assistant', content: fullContent, usage })
 
-    // 7. 发送结束信号
-    res.write(`data: ${JSON.stringify({ type: 'done', usage })}\n\n`)
-    res.write('data: [DONE]\n\n')
-    res.end()
+    // 7. 发送结束信号（客户端已断开则不再写，避免 EPIPE）
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ type: 'done', usage })}\n\n`)
+      res.write('data: [DONE]\n\n')
+      finished = true
+      res.end()
+    }
   } catch (error) {
     console.error('聊天接口错误:', error)
     // 如果已经开始了流式响应，用 SSE 格式返回错误

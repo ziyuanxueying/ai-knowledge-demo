@@ -1,5 +1,6 @@
 import express from 'express'
 import cors from 'cors'
+import rateLimit from 'express-rate-limit'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -20,9 +21,34 @@ const HAS_FRONTEND_BUILD = fs.existsSync(path.join(CLIENT_DIST, 'index.html'))
 
 const app = express()
 
+// 信任反向代理（Sealos / Render / Nginx 等平台部署时，客户端 IP 在 X-Forwarded-For 中）。
+// 不设置会导致 express-rate-limit 抛出 ERR_ERL_UNEXPECTED_X_FORWARDED_FOR。
+// 数字 1 表示信任最外层一跳代理。
+app.set('trust proxy', 1)
+
 // 中间件
 app.use(cors()) // 允许前端跨域访问
 app.use(express.json({ limit: '1mb' })) // 解析 JSON 请求体
+
+// ===== 接口限流 =====
+// AI 对话类接口会真实消耗模型 token，严格限制（默认每分钟 20 次，可用环境变量调整）
+const AI_RATE_MAX = Number(process.env.AI_RATE_LIMIT) || 20
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: AI_RATE_MAX,
+  standardHeaders: true, // 返回 RateLimit-* 标准头
+  legacyHeaders: false,
+  message: { error: `请求过于频繁，请稍后再试（AI 接口每分钟最多 ${AI_RATE_MAX} 次）` },
+})
+
+// 普通 API 接口（历史/知识库/Prompt 等，不消耗 token），宽松限制
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '请求过于频繁，请稍后再试' },
+})
 
 // 简单的请求日志
 app.use((req, res, next) => {
@@ -30,7 +56,7 @@ app.use((req, res, next) => {
   next()
 })
 
-// 健康检查
+// 健康检查（不限流，供平台探活/冷启动检测）
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -39,13 +65,14 @@ app.get('/api/health', (req, res) => {
   })
 })
 
-// 路由
-app.use('/api/chat', chatRouter)
-app.use('/api/agent', agentRouter)
-app.use('/api/knowledge', knowledgeRouter)
-app.use('/api/history', historyRouter)
-app.use('/api/prompts', promptsRouter)
-app.use('/api/compare', compareRouter)
+// 路由：AI 对话类接口用严格限流
+app.use('/api/chat', aiLimiter, chatRouter)
+app.use('/api/agent', aiLimiter, agentRouter)
+app.use('/api/compare', aiLimiter, compareRouter)
+// 普通接口用宽松限流
+app.use('/api/knowledge', apiLimiter, knowledgeRouter)
+app.use('/api/history', apiLimiter, historyRouter)
+app.use('/api/prompts', apiLimiter, promptsRouter)
 
 // ===== 前端静态文件托管（生产环境：client 构建产物由 Express 直接提供）=====
 if (HAS_FRONTEND_BUILD) {

@@ -1118,7 +1118,7 @@ body {
 .stop-btn {
   position: absolute;
   right: 8px;
-  bottom: 8px;
+  bottom: 14px;
   padding: 8px 16px;
   background: #ffffff;
   color: var(--text-primary);
@@ -2229,6 +2229,7 @@ body {
 }
 
 @media (max-width: 900px) {
+
   .compare-variants,
   .compare-results {
     grid-template-columns: 1fr;
