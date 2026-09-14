@@ -51,9 +51,9 @@ router.post('/', async (req, res) => {
     const sampleParams = { temperature, maxTokens }
 
     // 1. 获取或创建会话
-    let session = sessionId ? getSession(sessionId) : null
+    let session = sessionId ? await getSession(sessionId) : null
     if (!session) {
-      session = createSession('新对话')
+      session = await createSession('新对话')
     }
 
     // 2. 构造发送给 AI 的消息数组
@@ -87,7 +87,7 @@ router.post('/', async (req, res) => {
       try {
         const newSummary = await summarizeHistory(earlier, session.summary)
         // 写回 store 并重新拿到最新 session（含新 summary）
-        session = updateSessionSummary(session.id, newSummary, earlier.length)
+        session = await updateSessionSummary(session.id, newSummary, earlier.length)
         console.log(`[摘要] 触发: 压缩前 ${earlier.length} 条历史 -> ${newSummary.length} 字摘要`)
       } catch (err) {
         // 摘要失败不阻塞主流程，沿用旧 summary 或退化为滑动窗口
@@ -109,7 +109,7 @@ router.post('/', async (req, res) => {
     ]
 
     // 3. 先把用户消息存入历史
-    appendMessage(session.id, { role: 'user', content: message })
+    await appendMessage(session.id, { role: 'user', content: message })
 
     // 4. 设置 SSE 响应头
     res.setHeader('Content-Type', 'text/event-stream')
@@ -183,7 +183,7 @@ router.post('/', async (req, res) => {
     }
 
     // 6. 把 AI 完整回复存入历史（中断时也保存已生成的部分内容）
-    appendMessage(session.id, { role: 'assistant', content: fullContent, usage })
+    await appendMessage(session.id, { role: 'assistant', content: fullContent, usage })
 
     // 7. 发送结束信号（客户端已断开则不再写，避免 EPIPE）
     if (!res.writableEnded) {

@@ -11,6 +11,8 @@ import historyRouter from './routes/history.js'
 import promptsRouter from './routes/prompts.js'
 import compareRouter from './routes/compare.js'
 import { config } from './config/index.js'
+import { initDB, pingDB, closeDB } from './data/db.js'
+import { seedIfEmpty } from './data/kbStore.js'
 
 // 当前文件所在目录（server/src/），用于定位前端构建产物
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -57,12 +59,23 @@ app.use((req, res, next) => {
 })
 
 // 健康检查（不限流，供平台探活/冷启动检测）
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    model: config.dashscope.model,
-    time: new Date().toISOString(),
-  })
+app.get('/api/health', async (req, res) => {
+  try {
+    await pingDB()
+    res.json({
+      status: 'ok',
+      db: 'ok',
+      model: config.dashscope.model,
+      time: new Date().toISOString(),
+    })
+  } catch {
+    res.status(503).json({
+      status: 'degraded',
+      db: 'error',
+      model: config.dashscope.model,
+      time: new Date().toISOString(),
+    })
+  }
 })
 
 // 路由：AI 对话类接口用严格限流
@@ -110,13 +123,38 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: '服务器内部错误' })
 })
 
-// 启动服务
-app.listen(config.port, () => {
-  console.log('========================================')
-  console.log('  前端开发知识库后端服务已启动')
-  console.log('========================================')
-  console.log(`  地址: http://localhost:${config.port}`)
-  console.log(`  模型: ${config.dashscope.model}`)
-  console.log(`  温度: ${config.dashscope.temperature}`)
-  console.log('========================================')
-})
+// 启动服务：先初始化数据库（建表/迁移/种子），再监听端口
+async function bootstrap() {
+  try {
+    await initDB()
+    await seedIfEmpty()
+  } catch (err) {
+    console.error('❌ 数据库初始化失败，请检查 PostgreSQL 连接与 pgvector 扩展：', err.message)
+    process.exit(1)
+  }
+
+  app.listen(config.port, () => {
+    console.log('========================================')
+    console.log('  前端开发知识库后端服务已启动')
+    console.log('========================================')
+    console.log(`  地址: http://localhost:${config.port}`)
+    console.log(`  模型: ${config.dashscope.model}`)
+    console.log(`  温度: ${config.dashscope.temperature}`)
+    console.log('  存储: PostgreSQL + pgvector')
+    console.log('========================================')
+  })
+}
+
+async function shutdown() {
+  try {
+    await closeDB()
+  } catch {
+    // ignore
+  }
+  process.exit(0)
+}
+
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)
+
+bootstrap()

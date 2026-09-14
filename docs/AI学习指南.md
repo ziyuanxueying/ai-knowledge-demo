@@ -17,27 +17,33 @@
                           │ 读写
                           ▼
                    ┌──────────────┐
-                   │  本地文件     │
-                   │  history.json│  会话历史
-                   │ knowledge.json│ 知识库条目
+                   │  PostgreSQL  │  DATABASE_URL
+                   │  + pgvector  │  sessions / messages / kb_entries
+                   └──────────────┘
+                   ┌──────────────┐
+                   │ prompts.json │  DATA_DIR（在线编辑的 Prompt）
                    └──────────────┘
 ```
 
-**三种工作模式**：
+> 会话与知识库在 Postgres；`prompts.json` 落到 `config.dataDir`。前端四个视图：对话（含 Agent）、知识库、Prompt 实验室、A/B 对比。详见 [后端开发指南](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/docs/后端开发指南.md)。
 
-1. **对话模式**（`/api/chat`）：用户问、AI 答，纯文本交互，SSE 流式输出。
-2. **Agent 模式**（`/api/agent`）：AI 自主决定是否调用工具（查 npm 包、搜知识库、分析代码），多步推理直到给出最终答案，前端可视化"思考过程"。
-3. **知识库管理**（`/api/knowledge`）：CRUD 知识条目，存到 `knowledge.json`，Agent 的搜索工具立即可用。
+**产品形态**：
+
+1. **对话模式**（`/api/chat`）：多轮问答，SSE；可选摘要压缩、参数滑块、messages 预览。
+2. **Agent 模式**（`/api/agent`）：预检索 + Function Calling 循环，前端展示工具步骤。
+3. **知识库管理**（`/api/knowledge`）：CRUD + 向量化 + 关键词/语义对比。
+4. **A/B 实验室**（`/api/compare`）：两套配置并行生成，可选 LLM 裁判；不写会话。
+5. **Prompt 实验室**（`/api/prompts`）：在线改人设，写入 `prompts.json`，下轮对话生效。
 
 **数据流（以 Agent 为例）**：
 
 1. 用户输入任务（如"对比 react 和 vue 的体积"）
 2. 前端 POST `/api/agent`，建立 SSE 连接
-3. 后端组装 messages + tools 定义，调用通义千问
-4. 模型返回 `tool_calls`（要调 `get_npm_package_info`）→ 后端执行真实函数 → 结果作为 `tool` 消息回传
-5. 模型再次推理，可能再调一次工具（查 vue）→ 循环直到模型给出最终答案
-6. 全程通过 SSE 推送 `thinking` / `tool` / `content` 事件，前端实时渲染步骤和答案
-7. 完整记录（含工具步骤）存入 `history.json`
+3. 后端对非问候任务先做 **pgvector 语义预检索**，命中则注入 system，并推送检索步骤
+4. 再组装 messages + tools，调用通义千问
+5. 模型返回 `tool_calls`（如 `get_npm_package_info`）→ 后端执行 → `tool` 消息回传
+6. 循环直到最终答案；SSE 推 `thinking` / `tool` / `content`
+7. 完整记录（含 `toolSteps`）写入 Postgres `messages`
 
 ---
 
@@ -160,7 +166,7 @@ Function Calling 让模型返回一个结构化的 `tool_calls`（工具名 + �
 
 | 工具 | 作用 | 数据来源 |
 |------|------|----------|
-| `search_frontend_kb(keyword)` | 搜索前端知识库 | 本地 `knowledge.json`（可通过界面增删改查） |
+| `search_frontend_kb(keyword)` | 搜索前端知识库 | Postgres `kb_entries` 表（可通过界面增删改查） |
 | `get_npm_package_info(packageName)` | 查 npm 包版本/依赖数/体积 | 真实调用 npm registry API |
 | `analyze_code(code)` | 分析代码特征（行数/JSX/异步/Hooks） | 本地分析 |
 
@@ -256,17 +262,20 @@ cos(a, b) = (a · b) / (|a| × |b|)
     向量点积      向量长度乘积
 ```
 
-本项目在 [embedding.service.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/services/embedding.service.js) 的 `cosineSimilarity` 中用纯 JS 实现，条目量小（几十~几百条）时性能完全够用，无需向量数据库。
+本项目在库内用 pgvector 的 `<=>` 算**余弦距离**（越小越近），对外 `score = 1 - distance`。`embedding.service.js` 里仍保留纯 JS `cosineSimilarity`，便于对照公式；线上检索不再把全部向量读进 Node。
+
+索引：`kb_entries.embedding` 上的 HNSW（`vector_cosine_ops`）。条目很少时顺序扫描也够用，量上来后索引才明显。
 
 ### 4. 语义检索流程
 
 [kbStore.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/data/kbStore.js) 的 `searchEntriesSemantic(query, topK, threshold)`：
 
-1. **懒补齐**：先调用 `ensureEmbeddings()`，给没有向量的条目生成向量（首次检索或新建条目时触发）
-2. **查询向量化**：把用户查询用同一个 embedding 模型转向量
-3. **算相似度**：与每条条目的向量算余弦相似度
-4. **过滤 + 排序**：取相似度 ≥ `threshold`（默认 0.3）的，按相似度降序
-5. **返回 Top-K**：默认返回最多 3 条
+1. **懒补齐**：`ensureEmbeddings()` 给 `embedding IS NULL` 的行调 `/embeddings` 写回 `vector`
+2. **查询向量化**：同一 embedding 模型
+3. **库内排序**：`ORDER BY embedding <=> query_vector`，`WHERE distance <= 1 - threshold`
+4. **Top-K**：默认 3 条，`score = 1 - distance`
+
+未配 API Key 或向量化失败时，退化为 `searchEntries` 关键词 SQL（`strpos` + keywords JSON）。
 
 **关键参数**：
 - `topK`：返回条数上限。太小可能漏召回，太大拼进 prompt 浪费 token
@@ -304,7 +313,7 @@ cos(a, b) = (a · b) / (|a| × |b|)
 
 ### 7. 数据结构（含向量）
 
-每条知识库条目现在多一个 `embedding` 字段（向量，对前端不可见，剥离后返回）：
+每条知识库条目带 `embedding` 字段（向量，对前端不可见，剥离后返回），存到 Postgres `kb_entries` 表的 pgvector `vector` 列：
 
 ```javascript
 {
@@ -359,7 +368,7 @@ cos(a, b) = (a · b) / (|a| × |b|)
 
 ### 3. 本项目实现：摘要压缩策略
 
-**数据结构**（[store.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/data/store.js) 的 session 对象）：
+**数据结构**（[store.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/data/store.js) 操作 Postgres `sessions` 表，session 对象的字段对应表列）：
 
 ```javascript
 session = {
@@ -431,11 +440,13 @@ Prompt 是控制模型行为的核心手段（见第二章 System Prompt），�
 
 ### 2. 方案 A：Prompt 在线编辑器
 
-**数据从代码搬到数据文件**：System Prompt 从 [system.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/prompts/system.js) 硬编码，改为存在 [prompts.json](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/data/prompts.json)，按场景（scenario）组织：
+**数据从代码搬到数据文件**：System Prompt 从 [system.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/prompts/system.js) 硬编码，改为存在 `prompts.json`（落到 `config.dataDir`），按场景（scenario）组织：
 
 ```json
 { "id": "frontend_dev", "name": "前端开发助手", "content": "你是一个名叫\"小码\"的..." }
 ```
+
+> 首次访问 `/api/prompts` 时若文件不存在，[promptStore.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/data/promptStore.js) 自动写入种子（`frontend_dev` + `default` 两个场景），让前端编辑器开箱即有内容。Sealos 部署时 `DATA_DIR` 指向持久卷挂载路径，编辑过的 Prompt 重启不丢。
 
 **运行时链路**：
 
@@ -755,7 +766,7 @@ variant_done(0) → variant_done(1) → judge_start → judge_done
 
 学完本项目后，可以探索：
 
-1. **RAG 进阶**：接入向量数据库（如 Chroma、Milvus、pgvector）支持海量条目；加 Rerank 二次排序提升精度；用 RAG 评估集量化检索质量
+1. **RAG 进阶**：本项目已用 pgvector 做库内向量检索；进阶可加 Rerank 二次排序、用 RAG 评估集量化检索质量
 2. **上下文管理**：本项目第五章已实现滑窗 + 摘要压缩的基础版；进阶是接 tokenizer（如 tiktoken）实时精确统计 token，动态决定何时触发摘要
 3. **多模态**：让 AI 看图片、听语音（通义千问 VL 模型）
 4. **ReAct 模式**：让 Agent 在每一步都"思考-行动-观察"并记录推理链

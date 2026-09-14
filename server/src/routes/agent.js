@@ -41,13 +41,13 @@ router.post('/', async (req, res) => {
     }
 
     // 获取或创建会话（复用聊天会话存储）
-    let session = sessionId ? getSession(sessionId) : null;
+    let session = sessionId ? await getSession(sessionId) : null;
     if (!session) {
-      session = createSession('Agent 任务');
+      session = await createSession('Agent 任务');
     }
 
     // 把用户任务存入历史
-    appendMessage(session.id, { role: 'user', content: task });
+    await appendMessage(session.id, { role: 'user', content: task });
 
     // 设置 SSE 响应头
     res.setHeader('Content-Type', 'text/event-stream');
@@ -123,7 +123,7 @@ router.post('/', async (req, res) => {
     }
 
     // 把 Agent 的最终回复存入历史（含工具步骤记录，便于回看）
-    appendMessage(session.id, {
+    await appendMessage(session.id, {
       role: 'assistant',
       content: fullContent,
       usage,

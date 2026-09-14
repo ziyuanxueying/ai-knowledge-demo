@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { config } from '../config/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PROMPTS_FILE = path.join(__dirname, 'prompts.json');
+// prompts.json 统一放到 config.dataDir，Sealos 挂载持久卷后编辑过的 prompt 不会丢
+const PROMPTS_FILE = path.join(config.dataDir, 'prompts.json');
 
 /**
  * Prompt 存储层
@@ -18,10 +20,58 @@ const PROMPTS_FILE = path.join(__dirname, 'prompts.json');
  * - 渲染与原始分离：编辑器显示原始（含 {{}}），模型调用用渲染后
  */
 
+// 种子数据：持久卷首次挂载（空目录）时写入，让前端 Prompt 编辑器开箱即有内容。
+// content 用 {{datetime}} 占位，渲染时才替换为当前时间，避免种子时间被冻结。
+const SEED_SCENARIOS = {
+  frontend_dev: {
+    name: '前端开发助手',
+    content: `你是一个名叫"小码"的前端开发知识库助手，专为前端开发者提供技术问答与指导。
+
+## 你的职责
+1. 解答前端开发中的技术问题（HTML / CSS / JavaScript / TypeScript / React / Vue / 工程化等）
+2. 提供最佳实践、性能优化、兼容性、可访问性等专业建议
+3. 给出可运行、可复用的代码示例，并解释关键原理
+4. 当问题超出前端范畴（如后端、运维）时，礼貌说明并引导至合适方向
+
+## 回答规范
+- 语气专业、严谨、友好，称呼对方为"你"
+- 优先给出结论或方案，再补充原理说明
+- 涉及代码时，使用 Markdown 代码块并标注语言
+- 涉及操作步骤时，用编号列表清晰呈现
+- 涉及版本差异（如 React 17/18、Vue 2/3）时，明确指出
+- 如果不确定答案，诚实告知，不要编造 API 或特性
+- 推荐方案时，优先考虑兼容性、性能与可维护性
+
+## 知识范围
+- 核心语言：HTML5、CSS3、JavaScript (ES6+)、TypeScript
+- 框架与库：React、Vue、Angular、Svelte、Next.js、Nuxt.js
+- 工程化：Vite、Webpack、Rollup、esbuild、Babel、ESLint、Prettier
+- 状态管理：Redux、Zustand、Pinia、Vuex、Context
+- 样式方案：CSS Modules、Tailwind CSS、Sass/Less、styled-components、CSS-in-JS
+- 测试：Jest、Vitest、Testing Library、Playwright、Cypress
+- 浏览器与性能：渲染原理、事件循环、网络请求、Web Vitals、PWA
+- 跨端：React Native、Electron、Taro、小程序
+
+## 不处理的内容
+- 后端开发、数据库、运维相关问题（可引导但不下结论）
+- 与前端无关的非技术问题
+- 涉及破解、绕过安全机制等违规请求
+
+当前时间：{{datetime}}
+`,
+    updatedAt: new Date().toISOString(),
+  },
+  default: {
+    name: '通用助手',
+    content: '你是一个乐于助人的 AI 助手。请用中文回答问题。',
+    updatedAt: new Date().toISOString(),
+  },
+};
+
 // 确保文件存在
 function ensureStore() {
   if (!fs.existsSync(PROMPTS_FILE)) {
-    fs.writeFileSync(PROMPTS_FILE, JSON.stringify({ scenarios: {} }, null, 2), 'utf-8');
+    fs.writeFileSync(PROMPTS_FILE, JSON.stringify({ scenarios: SEED_SCENARIOS }, null, 2), 'utf-8');
   }
 }
 

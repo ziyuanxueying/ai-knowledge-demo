@@ -30,8 +30,8 @@ const router = Router();
  * GET /api/knowledge/stats
  * 向量化状态统计（总数 / 已向量化 / 待向量化）
  */
-router.get('/stats', (req, res) => {
-  res.json(stats());
+router.get('/stats', async (req, res) => {
+  res.json(await stats());
 });
 
 /**
@@ -48,7 +48,7 @@ router.get('/search', async (req, res) => {
   if (!q) return res.json({ query: '', keyword: [], semantic: [] });
   try {
     if (mode === 'keyword') {
-      return res.json({ query: q, keyword: searchEntries(q), semantic: [] });
+      return res.json({ query: q, keyword: await searchEntries(q), semantic: [] });
     }
     if (mode === 'semantic') {
       const semantic = await searchEntriesSemantic(q, topK, 0);
@@ -88,8 +88,8 @@ router.post('/embeddings/:action', async (req, res) => {
  * GET /api/knowledge
  * 列出全部条目（按更新时间倒序）
  */
-router.get('/', (req, res) => {
-  const entries = listEntries();
+router.get('/', async (req, res) => {
+  const entries = await listEntries();
   res.json({ entries });
 });
 
@@ -97,8 +97,8 @@ router.get('/', (req, res) => {
  * GET /api/knowledge/:id
  * 获取单个条目
  */
-router.get('/:id', (req, res) => {
-  const entry = getEntry(req.params.id);
+router.get('/:id', async (req, res) => {
+  const entry = await getEntry(req.params.id);
   if (!entry) {
     return res.status(404).json({ error: '条目不存在' });
   }
@@ -136,8 +136,8 @@ router.put('/:id', async (req, res) => {
  * DELETE /api/knowledge/:id
  * 删除条目
  */
-router.delete('/:id', (req, res) => {
-  const ok = deleteEntry(req.params.id);
+router.delete('/:id', async (req, res) => {
+  const ok = await deleteEntry(req.params.id);
   if (!ok) {
     return res.status(404).json({ error: '条目不存在' });
   }

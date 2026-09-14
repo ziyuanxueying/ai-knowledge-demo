@@ -1,35 +1,24 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+/**
+ * 知识库存储层（PostgreSQL + pgvector 版）
+ *
+ * 【从 SQLite 迁移到 PostgreSQL 的改变】：
+ * - embedding 从「JSON 字符串存 TEXT」改为 pgvector 的 vector 类型
+ * - 语义检索从「全量读内存 + JS 算余弦相似度」改为数据库内 <=> 余弦距离算子
+ * - better-sqlite3 同步 API → pg 异步 API，所有函数改为 async
+ *
+ * 【保持不变】：
+ * - 所有导出函数的返回值结构不变，仅同步变异步
+ * - 关键词检索、相似度阈值、Top-K 等逻辑不变
+ */
+
+import { query as sql, withTransaction, toVectorSql } from './db.js';
 import {
   embedTexts,
   embedQuery,
-  cosineSimilarity,
   hasEmbeddingConfig,
 } from '../services/embedding.service.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const KB_FILE = path.join(__dirname, 'knowledge.json');
-
-/**
- * 知识库存储层（RAG 升级版）
- *
- * 【AI 学习要点 - RAG 检索增强生成】：
- * RAG = Retrieval-Augmented Generation（检索增强生成）
- * 流程：用户提问 → 检索相关知识 → 把知识塞进 prompt → 模型据此回答
- *
- * 本存储层在原 CRUD 基础上增加"向量化"能力：
- * - 每条条目存一份 embedding 向量（1024 维）
- * - 检索时用余弦相似度找语义最相近的 Top-K
- * - create/update 时自动（重新）生成向量
- * - 老条目无向量时，ensureEmbeddings() 懒补齐
- *
- * 与向量数据库的区别：这里直接在 JSON 里存向量、用 JS 算余弦相似度。
- * 条目量小（几十~几百）时性能完全够用，且零依赖、便于学习理解原理。
- * 生产环境数据量大时才需引入向量数据库（如 Milvus / pgvector）。
- */
-
-// 种子数据：首次启动时写入，让 Agent 有内容可搜
+// 种子数据：表为空且没有 knowledge.json 时写入，让 Agent 有内容可搜
 const SEED_ENTRIES = [
   {
     title: '虚拟 DOM',
@@ -75,35 +64,27 @@ const SEED_ENTRIES = [
   },
 ];
 
-function ensureKbFile() {
-  if (!fs.existsSync(KB_FILE)) {
-    const seed = SEED_ENTRIES.map((e, i) => ({
-      id: `kb_seed_${i + 1}`,
-      ...e,
-      embedding: null, // 种子数据初始无向量，首次检索时懒补齐
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }));
-    fs.writeFileSync(KB_FILE, JSON.stringify({ entries: seed }, null, 2), 'utf-8');
-  }
-}
-
-function readAll() {
-  ensureKbFile();
-  return JSON.parse(fs.readFileSync(KB_FILE, 'utf-8'));
-}
-
-function writeAll(data) {
-  fs.writeFileSync(KB_FILE, JSON.stringify(data, null, 2), 'utf-8');
-}
+const ENTRY_COLS = 'id, title, keywords, category, content, "createdAt", "updatedAt"';
 
 function genId() {
   return `kb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function parseEmbedding(value) {
+  if (!value) return null;
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 /**
  * 构造用于生成向量的文本：把标题/分类/关键词/内容拼成一段
- * 让 embedding 模型"看到"全部语义信息，向量更具区分度。
  */
 function buildEmbedText(entry) {
   const kw = (entry.keywords || []).join('、');
@@ -111,77 +92,110 @@ function buildEmbedText(entry) {
 }
 
 /**
- * 为单条条目生成并保存向量（内部使用）
- * @param {object} entry - 条目（会被写入文件）
- * @param {object} data - 全量数据（用于落盘）
- * @returns {Promise<void>}
+ * 把数据库行转换为 API 返回格式（剥离 embedding，解析 keywords）
  */
-async function embedEntry(entry, data) {
-  if (!hasEmbeddingConfig()) {
-    entry.embedding = null;
-    return;
+function rowToEntry(row, { stripEmbedding = true } = {}) {
+  if (!row) return null;
+  const entry = {
+    id: row.id,
+    title: row.title,
+    keywords: JSON.parse(row.keywords || '[]'),
+    category: row.category,
+    content: row.content,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+  if (!stripEmbedding && row.embedding) {
+    entry.embedding = parseEmbedding(row.embedding);
   }
-  try {
-    const [vector] = await embedTexts([buildEmbedText(entry)]);
-    entry.embedding = vector;
-  } catch {
-    // 向量化失败不阻断写入，置空后续可补齐
-    entry.embedding = null;
-  }
-  writeAll(data);
+  return entry;
 }
 
 /**
- * 列出全部条目（按更新时间倒序）。
- * 向量字段体积大且对前端无意义，这里剥离掉不返回给 UI。
+ * 为单条条目生成并保存向量
  */
-export function listEntries() {
-  const { entries } = readAll();
-  return [...entries]
-    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-    .map(({ embedding, ...rest }) => rest);
+async function embedEntry(id, entry) {
+  if (!hasEmbeddingConfig()) {
+    return null;
+  }
+  try {
+    const [vector] = await embedTexts([buildEmbedText(entry)]);
+    await sql('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [toVectorSql(vector), id]);
+    return vector;
+  } catch {
+    await sql('UPDATE kb_entries SET embedding = NULL WHERE id = $1', [id]);
+    return null;
+  }
+}
+
+/**
+ * 首次启动：表为空时写入种子条目（由 app.js 在 initDB 之后调用）
+ */
+export async function seedIfEmpty() {
+  const count = (await sql('SELECT COUNT(*)::int AS c FROM kb_entries')).rows[0].c;
+  if (count > 0) return;
+
+  const now = new Date().toISOString();
+  await withTransaction(async (client) => {
+    for (let i = 0; i < SEED_ENTRIES.length; i++) {
+      const e = SEED_ENTRIES[i];
+      await client.query(
+        `INSERT INTO kb_entries (id, title, keywords, category, content, embedding, "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)`,
+        [`kb_seed_${i + 1}`, e.title, JSON.stringify(e.keywords || []), e.category || '', e.content || '', now, now]
+      );
+    }
+  });
+  console.log(`[DB] 已写入 ${SEED_ENTRIES.length} 条种子知识库数据`);
+}
+
+/**
+ * 列出全部条目（按更新时间倒序，剥离向量）
+ */
+export async function listEntries() {
+  const res = await sql(`SELECT ${ENTRY_COLS} FROM kb_entries ORDER BY "updatedAt" DESC`);
+  return res.rows.map((r) => rowToEntry(r));
 }
 
 /**
  * 获取单个条目（剥离向量）
  */
-export function getEntry(id) {
-  const { entries } = readAll();
-  const e = entries.find((x) => x.id === id);
-  if (!e) return null;
-  const { embedding, ...rest } = e;
-  return rest;
+export async function getEntry(id) {
+  const res = await sql(`SELECT ${ENTRY_COLS} FROM kb_entries WHERE id = $1`, [id]);
+  return rowToEntry(res.rows[0]);
 }
 
 /**
  * 创建条目（自动向量化）
  */
 export async function createEntry({ title, keywords = [], category = '', content = '' }) {
-  const data = readAll();
   const now = new Date().toISOString();
+  const id = genId();
   const entry = {
-    id: genId(),
+    id,
     title: String(title || '').trim(),
     keywords: Array.isArray(keywords) ? keywords.map((k) => String(k).trim()).filter(Boolean) : [],
     category: String(category || '').trim(),
     content: String(content || ''),
-    embedding: null,
-    createdAt: now,
-    updatedAt: now,
   };
-  data.entries.push(entry);
-  await embedEntry(entry, data);
-  const { embedding, ...rest } = entry;
-  return rest;
+  await sql(
+    `INSERT INTO kb_entries (id, title, keywords, category, content, embedding, "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)`,
+    [entry.id, entry.title, JSON.stringify(entry.keywords), entry.category, entry.content, now, now]
+  );
+  await embedEntry(id, entry);
+  const res = await sql(`SELECT ${ENTRY_COLS} FROM kb_entries WHERE id = $1`, [id]);
+  return rowToEntry(res.rows[0]);
 }
 
 /**
  * 更新条目（内容变化后自动重新向量化）
  */
 export async function updateEntry(id, patch) {
-  const data = readAll();
-  const entry = data.entries.find((e) => e.id === id);
-  if (!entry) return null;
+  const rowRes = await sql(`SELECT ${ENTRY_COLS} FROM kb_entries WHERE id = $1`, [id]);
+  const row = rowRes.rows[0];
+  if (!row) return null;
+  const entry = rowToEntry(row);
   if (patch.title !== undefined) entry.title = String(patch.title).trim();
   if (patch.keywords !== undefined) {
     entry.keywords = Array.isArray(patch.keywords)
@@ -190,194 +204,183 @@ export async function updateEntry(id, patch) {
   }
   if (patch.category !== undefined) entry.category = String(patch.category).trim();
   if (patch.content !== undefined) entry.content = String(patch.content);
-  entry.updatedAt = new Date().toISOString();
-  // 内容变了，向量失效，重新生成
-  await embedEntry(entry, data);
-  const { embedding, ...rest } = entry;
-  return rest;
+  const now = new Date().toISOString();
+  await sql(
+    `UPDATE kb_entries
+     SET title = $1, keywords = $2, category = $3, content = $4, embedding = NULL, "updatedAt" = $5
+     WHERE id = $6`,
+    [entry.title, JSON.stringify(entry.keywords), entry.category, entry.content, now, id]
+  );
+  await embedEntry(id, entry);
+  const res = await sql(`SELECT ${ENTRY_COLS} FROM kb_entries WHERE id = $1`, [id]);
+  return rowToEntry(res.rows[0]);
 }
 
 /**
  * 删除条目
  */
-export function deleteEntry(id) {
-  const data = readAll();
-  const before = data.entries.length;
-  data.entries = data.entries.filter((e) => e.id !== id);
-  writeAll(data);
-  return data.entries.length < before;
+export async function deleteEntry(id) {
+  const res = await sql('DELETE FROM kb_entries WHERE id = $1', [id]);
+  return res.rowCount > 0;
 }
 
 /**
  * 搜索条目 - 关键词匹配（title + keywords + content + category）
- * @param {string} query - 搜索词
- * @returns {Array} 匹配的条目数组（剥离向量）
  */
-export function searchEntries(query) {
-  if (!query) return [];
-  const q = String(query).toLowerCase();
-  const { entries } = readAll();
-  return entries
-    .filter((e) => {
-      const inTitle = e.title.toLowerCase().includes(q);
-      const inKeywords = e.keywords.some((k) => k.toLowerCase().includes(q) || q.includes(k.toLowerCase()));
-      const inContent = e.content.toLowerCase().includes(q);
-      const inCategory = e.category?.toLowerCase().includes(q);
-      return inTitle || inKeywords || inContent || inCategory;
-    })
-    .map(({ embedding, ...rest }) => rest);
+export async function searchEntries(queryText) {
+  if (!queryText) return [];
+  const q = String(queryText).toLowerCase();
+  const res = await sql(
+    `SELECT ${ENTRY_COLS} FROM kb_entries
+     WHERE strpos(lower(title), $1) > 0
+        OR strpos(lower(category), $1) > 0
+        OR strpos(lower(content), $1) > 0
+        OR strpos(lower(keywords), $1) > 0
+        OR EXISTS (
+             SELECT 1 FROM jsonb_array_elements_text(keywords::jsonb) AS kw
+             WHERE strpos($1, lower(kw)) > 0
+           )
+     ORDER BY "updatedAt" DESC`,
+    [q]
+  );
+  return res.rows.map((row) => rowToEntry(row));
 }
 
 /**
- * 搜索条目 - 语义检索（RAG 核心）
- * 1. 先确保所有条目都有向量（懒补齐）
- * 2. 把查询向量化
- * 3. 与每条条目算余弦相似度
- * 4. 取相似度 >= threshold 的 Top-K
- *
- * @param {string} query - 用户查询
- * @param {number} topK - 返回最多多少条（默认 3）
- * @param {number} threshold - 相似度下限（默认 0.3，过滤无关结果）
- * @returns {Promise<Array>} [{ ...entry, score }] 按相似度降序
+ * 搜索条目 - 语义检索（RAG 核心，pgvector 余弦距离）
  */
-export async function searchEntriesSemantic(query, topK = 3, threshold = 0.3) {
-  if (!query) return [];
+export async function searchEntriesSemantic(queryText, topK = 3, threshold = 0.3) {
+  if (!queryText) return [];
   await ensureEmbeddings();
-  const { entries } = readAll();
-  const withVector = entries.filter((e) => Array.isArray(e.embedding) && e.embedding.length);
-  if (withVector.length === 0) {
-    // 没有任何向量（如未配置 API Key），回退关键词检索
-    return searchEntries(query).map((e) => ({ ...e, score: 0 }));
+
+  if (!hasEmbeddingConfig()) {
+    return (await searchEntries(queryText)).map((e) => ({ ...e, score: 0 }));
   }
+
   let qVec;
   try {
-    qVec = await embedQuery(query);
+    qVec = await embedQuery(queryText);
   } catch {
-    // 查询向量化失败，回退关键词检索
-    return searchEntries(query).map((e) => ({ ...e, score: 0 }));
+    return (await searchEntries(queryText)).map((e) => ({ ...e, score: 0 }));
   }
-  return withVector
-    .map((e) => ({ entry: e, score: cosineSimilarity(qVec, e.embedding) }))
-    .filter((x) => x.score >= threshold)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK)
-    .map(({ entry, score }) => {
-      const { embedding, ...rest } = entry;
-      return { ...rest, score: Number(score.toFixed(4)) };
-    });
+
+  // <=> 是余弦距离（越小越相似），相似度 score = 1 - distance
+  // (distance <= 1 - threshold) 等价于 (score >= threshold)
+  const res = await sql(
+    `SELECT ${ENTRY_COLS.split(', ').map((c) => `k.${c}`).join(', ')},
+            1 - (k.embedding <=> q.v) AS score
+     FROM kb_entries k, (SELECT $1::vector AS v) AS q
+     WHERE k.embedding IS NOT NULL AND (k.embedding <=> q.v) <= $2
+     ORDER BY k.embedding <=> q.v
+     LIMIT $3`,
+    [toVectorSql(qVec), 1 - threshold, topK]
+  );
+
+  return res.rows.map((row) => ({
+    ...rowToEntry(row),
+    score: Number(Number(row.score).toFixed(4)),
+  }));
 }
 
 /**
  * 检索对比：同时返回关键词检索与语义检索的结果
- * 供前端"检索对比面板"直观展示两种方式的召回差异。
- *
- * @param {string} query
- * @param {number} topK
- * @returns {Promise<{ query, keyword: Array, semantic: Array }>}
  */
-export async function searchCompare(query, topK = 3) {
-  if (!query) return { query: '', keyword: [], semantic: [] };
-  const keyword = searchEntries(query);
+export async function searchCompare(queryText, topK = 3) {
+  if (!queryText) return { query: '', keyword: [], semantic: [] };
+  const keyword = await searchEntries(queryText);
   let semantic = [];
   try {
-    semantic = await searchEntriesSemantic(query, topK, 0);
+    semantic = await searchEntriesSemantic(queryText, topK, 0);
   } catch {
     semantic = [];
   }
-  return { query, keyword, semantic };
+  return { query: queryText, keyword, semantic };
 }
 
 /**
  * 补齐所有缺失向量的条目（懒补齐）
- * 首次语义检索、或手动点"生成向量"时调用。
- * @returns {Promise<{ total: number, embedded: number, before: number }>}
  */
 export async function ensureEmbeddings() {
-  const data = readAll();
-  const missing = data.entries.filter(
-    (e) => !Array.isArray(e.embedding) || e.embedding.length === 0
-  );
-  if (missing.length === 0) {
-    return stats();
-  }
-  if (!hasEmbeddingConfig()) {
-    return stats();
-  }
-  // 批量向量化，减少 API 调用次数
-  const texts = missing.map(buildEmbedText);
+  const missing = (await sql(`SELECT ${ENTRY_COLS} FROM kb_entries WHERE embedding IS NULL`)).rows;
+  if (missing.length === 0) return stats();
+  if (!hasEmbeddingConfig()) return stats();
+
+  const texts = missing.map((row) => buildEmbedText(rowToEntry(row)));
   try {
     const vectors = await embedTexts(texts);
-    missing.forEach((e, i) => {
-      e.embedding = vectors[i] || null;
+    await withTransaction(async (client) => {
+      for (let i = 0; i < missing.length; i++) {
+        if (vectors[i]) {
+          await client.query('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [
+            toVectorSql(vectors[i]),
+            missing[i].id,
+          ]);
+        }
+      }
     });
   } catch {
-    // 整批失败，逐条尝试（某条文本异常时不影响其他）
-    for (const e of missing) {
+    for (const row of missing) {
       try {
-        const [v] = await embedTexts([buildEmbedText(e)]);
-        e.embedding = v;
+        const [v] = await embedTexts([buildEmbedText(rowToEntry(row))]);
+        await sql('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [toVectorSql(v), row.id]);
       } catch {
-        e.embedding = null;
+        // 置空，后续可重试
       }
     }
   }
-  writeAll(data);
   return stats();
 }
 
 /**
  * 重新生成全部条目的向量
- * 内容未变但换了 embedding 模型、或向量损坏时使用。
- * @returns {Promise<{ total: number, embedded: number, before: number }>}
  */
 export async function regenerateAllEmbeddings() {
-  const data = readAll();
-  if (data.entries.length === 0 || !hasEmbeddingConfig()) {
-    return stats();
-  }
-  const texts = data.entries.map(buildEmbedText);
+  const allRows = (await sql(`SELECT ${ENTRY_COLS} FROM kb_entries`)).rows;
+  if (allRows.length === 0 || !hasEmbeddingConfig()) return stats();
+
+  const texts = allRows.map((row) => buildEmbedText(rowToEntry(row)));
   try {
     const vectors = await embedTexts(texts);
-    data.entries.forEach((e, i) => {
-      e.embedding = vectors[i] || null;
+    await withTransaction(async (client) => {
+      for (let i = 0; i < allRows.length; i++) {
+        await client.query('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [
+          vectors[i] ? toVectorSql(vectors[i]) : null,
+          allRows[i].id,
+        ]);
+      }
     });
   } catch {
-    // 批量失败，逐条尝试
-    for (const e of data.entries) {
+    for (const row of allRows) {
       try {
-        const [v] = await embedTexts([buildEmbedText(e)]);
-        e.embedding = v;
+        const [v] = await embedTexts([buildEmbedText(rowToEntry(row))]);
+        await sql('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [toVectorSql(v), row.id]);
       } catch {
-        e.embedding = null;
+        // 置空
       }
     }
   }
-  writeAll(data);
   return stats();
 }
 
 /**
  * 统计：总数 / 已向量化 / 待向量化
  */
-export function stats() {
-  const { entries } = readAll();
-  const total = entries.length;
-  const embedded = entries.filter(
-    (e) => Array.isArray(e.embedding) && e.embedding.length > 0
-  ).length;
+export async function stats() {
+  const total = (await sql('SELECT COUNT(*)::int AS c FROM kb_entries')).rows[0].c;
+  const embedded = (await sql('SELECT COUNT(*)::int AS c FROM kb_entries WHERE embedding IS NOT NULL')).rows[0].c;
   return { total, embedded, pending: total - embedded };
 }
 
 /**
  * 把搜索结果格式化为给模型用的文本
- * （Agent 工具调用时使用，语义检索结果带相似度分）
  */
-export function formatSearchResultText(query, results) {
+export function formatSearchResultText(queryText, results) {
   if (!results || results.length === 0) {
-    return `知识库中未找到与 "${query}" 相关的内容。`;
+    return `知识库中未找到与 "${queryText}" 相关的内容。`;
   }
   const parts = results.map((e, i) => {
-    const scoreText = typeof e.score === 'number' && e.score > 0 ? `（相似度 ${e.score}）` : '';
+    const scoreText =
+      typeof e.score === 'number' && e.score > 0 ? `（相似度 ${e.score}）` : '';
     return `【${i + 1}. ${e.title}】（分类：${e.category || '未分类'}）${scoreText}\n${e.content}`;
   });
   return `在知识库中找到 ${results.length} 条相关内容：\n\n${parts.join('\n\n')}`;

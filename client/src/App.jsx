@@ -14,9 +14,7 @@ import { getPrompts } from './utils/api.js';
 /**
  * 应用主组件
  *
- * 两种视图：
- * - chat：对话（含「对话 / Agent」两种模式）
- * - knowledge：知识库管理
+ * 四种视图：chat（含对话/Agent）/ knowledge / prompt / compare
  */
 export default function App() {
   const [view, setView] = useState('chat'); // 'chat' | 'knowledge' | 'prompt'

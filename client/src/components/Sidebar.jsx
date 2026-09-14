@@ -1,7 +1,7 @@
 /**
  * 侧边栏：新建对话 + 知识库入口 + 会话列表
  *
- * view: 'chat' | 'knowledge'，用于高亮当前所在视图
+ * view: 'chat' | 'knowledge' | 'prompt' | 'compare'
  * 点击会话项会切回 chat 视图（由 App 的 onSwitch 负责）
  */
 export default function Sidebar({

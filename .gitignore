@@ -5,3 +5,7 @@ node_modules/
 server/src/history.json
 dist/
 .vite/
+*.profraw
+server/src/data/app.db
+server/src/data/app.db-shm
+server/src/data/app.db-wal

@@ -29,6 +29,13 @@ ai-knowledge-demo/
 ├── server/          # Node.js + Express 后端
 │   ├── src/
 │   │   ├── app.js   # Express 入口（已适配静态托管）
+│   │   ├── config/index.js   # 配置（含 dataDir 持久卷路径）
+│   │   ├── data/             # 默认数据目录（本地开发）
+│   │   │   ├── db.js              # Postgres 连接 + pgvector 建表/迁移
+│   │   │   ├── store.js           # 会话历史（Postgres）
+│   │   │   ├── kbStore.js         # 知识库（Postgres + pgvector）
+│   │   │   ├── promptStore.js     # Prompt 编辑存储（prompts.json）
+│   │   │   └── knowledge.json     # 知识库种子（首次启动迁移到 Postgres）
 │   │   └── ...
 │   └── .env         # 环境变量（不入库）
 ├── Dockerfile       # 容器构建文件（备用，DevBox 上线不需要）
@@ -39,15 +46,17 @@ ai-knowledge-demo/
 ### 技术栈
 
 - 前端：React 18 + Vite 5 + react-markdown
-- 后端：Node.js + Express 4
+- 后端：Node.js + Express 4 + pg（PostgreSQL）
+- 数据：PostgreSQL + pgvector（会话/知识库/向量）+ `prompts.json`（可在线编辑的 Prompt，可挂持久卷）
 - AI：通义千问（DashScope API）
-- 部署：Sealos（DevBox + entrypoint.sh 上线 + 应用管理）
+- 部署：Sealos（DevBox + entrypoint.sh 上线 + 应用管理 + 持久卷）
 
 ### 核心特性
 
 - SSE 流式输出 AI 回复
 - Markdown 渲染（代码高亮、表格、列表）
-- 对话历史保存（JSON 文件）
+- 对话历史 / 知识库 / 向量统一存 PostgreSQL + pgvector（托管数据库重启不丢）
+- Prompt 可在线编辑（`prompts.json` 落到持久卷）
 - Agent 模式 + 工具调用
 - RAG 知识库检索
 - A/B 模型对比
@@ -110,7 +119,22 @@ const PORT = process.env.PORT || 3001;
 
 > ⚠️ **不要把端口写死成 3001**。Sealos 上线后会自动注入 `PORT=8080`，服务必须监听 8080 才能被外网访问到。
 
-### 2.4 （可选）创建 Dockerfile
+### 2.4 数据存储：Postgres + DATA_DIR 【关键】
+
+会话 / 消息 / 知识库 / 向量在 PostgreSQL（需 pgvector 扩展），由 `DATABASE_URL` 连接。`prompts.json` 仍走文件，路径由 `DATA_DIR` 决定（[config/index.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/config/index.js)）：
+
+```javascript
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+```
+
+- **本地开发**：`docker compose up -d` 起 pgvector，`.env` 里 `DATABASE_URL` 指向它；`DATA_DIR` 留空即可。
+- **Sealos 部署**：
+  1. 开通带 pgvector 的 Postgres（或自建后 `CREATE EXTENSION vector`），把内网连接串填到 `DATABASE_URL`。托管库若要求 SSL，加 `PGSSL=true` 或 `PGSSLMODE=no-verify`。
+  2. 仍建议挂持久卷到 `/app/data` 并设 `DATA_DIR=/app/data`，否则编辑过的 Prompt 会随容器丢失。
+
+> ⚠️ 只挂持久卷、不配 `DATABASE_URL` 时，服务启动会失败（连不上库）。会话数据在数据库里，不在 `app.db`。
+
+### 2.5 （可选）创建 Dockerfile
 
 > DevBox 上线方式**不需要** Dockerfile（DevBox 环境没有 docker 命令）。Dockerfile 仅在通过镜像仓库部署时使用，这里作为备用。
 
@@ -396,6 +420,8 @@ npm start
 - [ ] entrypoint.sh 内容正确：cd 路径指向 `ai-knowledge-demo/server`
 - [ ] 后端能手动启动：`bash entrypoint.sh` 测试通过
 - [ ] `.env` 文件已配置：`server/.env` 存在且 API Key 正确
+- [ ] 已开通 PostgreSQL（启用 pgvector），准备好 `DATABASE_URL`
+- [ ] 已规划持久卷挂载路径（如 `/app/data`），上线后挂卷 + 设 `DATA_DIR`（详见 [6.5](#65-配置持久卷挂载关键)）
 
 ### 6.2 点击上线
 
@@ -447,17 +473,66 @@ DASHSCOPE_API_KEY=你的通义千问API_KEY
 QWEN_MODEL=qwen-turbo
 TEMPERATURE=0.7
 MAX_TOKENS=2048
+DATABASE_URL=postgresql://用户:密码@主机:5432/ai_knowledge
+PGSSLMODE=no-verify
+DATA_DIR=/app/data
 ```
 
 > ⚠️ **不要设置 PORT 变量**。Sealos 会自动注入 `PORT=8080`，手动设置可能导致冲突。
+>
+> `DATABASE_URL` 用内网地址。`DATA_DIR` 必须和 6.5 里持久卷挂载路径**一字不差**，否则 Prompt 文件会写到容器临时层。
 
-### 6.5 保存并等待部署
+### 6.5 配置持久卷挂载 【关键】
+
+持久卷的作用是把 `prompts.json`（在线编辑的 Prompt）落到独立磁盘。会话与知识库在 PostgreSQL，不依赖这张盘。**重启 / 重新发布 / 缩容到 0** 后，Prompt 编辑结果仍在。
+
+#### 6.5.1 创建持久卷
+
+在应用管理 → 你的应用 → **「持久卷」/「存储」** 区域：
+
+| 配置项 | 值 | 说明 |
+|--------|-----|------|
+| 容量 | `1 Gi` | Demo 足够；后续可扩容 |
+| 挂载路径 | `/app/data` | 容器内路径，可自定义但必须与 `DATA_DIR` 一致 |
+| 访问模式 | `ReadWriteOnce` | 单实例独占即可 |
+
+#### 6.5.2 设置 DATA_DIR 环境变量
+
+在 6.4 的环境变量里加：
+
+```
+DATA_DIR=/app/data
+```
+
+挂载路径与 `DATA_DIR` 必须完全一致。
+
+#### 6.5.3 首次启动行为
+
+持久卷首次挂载时是空目录。服务启动会自动完成：
+
+1. [config/index.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/config/index.js) 创建 `DATA_DIR` 目录（如已存在则跳过）
+2. [db.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/data/db.js) 连接 Postgres，启用 pgvector、建表（`sessions` / `messages` / `kb_entries`）
+3. 若旧的 `history.json` / `knowledge.json` 种子存在且表为空，自动迁移到 Postgres（幂等）
+4. 首次访问 `/api/prompts` 时，[promptStore.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/data/promptStore.js) 在 `DATA_DIR` 下写入 `prompts.json` 种子
+
+#### 6.5.4 验证持久卷生效
+
+部署完成后，做一次"创建会话 + 编辑 Prompt"操作，然后：
+
+1. 在应用管理里 **「重启」** 应用（或等自动缩容到 0 后再次访问触发冷启动）
+2. 重新打开公网地址
+3. 会话历史仍在（左侧会话列表没空）
+4. 进 Prompt 实验室，编辑过的 Prompt 内容仍在
+
+> 会话在 Postgres，重启后列表仍在说明 `DATABASE_URL` 指向的是同一套库。Prompt 丢失才是 `DATA_DIR` / 持久卷问题。
+
+### 6.6 保存并等待部署
 
 1. 保存配置，Sealos 自动重新部署
 2. 等待 2-3 分钟，状态变为 **Running**
 3. 公网地址生成后（约 1 分钟），浏览器打开访问
 
-### 6.6 验证上线
+### 6.7 验证上线
 
 浏览器打开公网地址，检查：
 
@@ -465,8 +540,9 @@ MAX_TOKENS=2048
 - [ ] 发送消息，AI 流式回复正常
 - [ ] Agent 模式工具调用正常
 - [ ] 刷新页面不 404
+- [ ] 创建会话/编辑 Prompt 后重启应用，数据仍在（持久卷生效）
 
-### 6.7 查看应用日志
+### 6.8 查看应用日志
 
 应用详情页点 **「日志」**，正常应看到：
 
@@ -489,6 +565,10 @@ Server running at http://0.0.0.0:8080/
 | `TEMPERATURE` | ❌ | `0.7` | 采样温度 |
 | `MAX_TOKENS` | ❌ | `2048` | 最大 Token 数 |
 | `PORT` | ❌ | `3001` | 调试端口 |
+| `DATABASE_URL` | ✅ | `postgresql://...` | 指向启用 pgvector 的 Postgres |
+| `DATA_DIR` | ❌ | 留空 | 调试阶段默认 `server/src/data`，无需设 |
+
+> DevBox 调试阶段会话数据在 Postgres；`prompts.json` 写在 `server/src/data`。上线阶段再挂持久卷。
 
 ### 7.2 应用管理上线阶段（控制台配置）
 
@@ -498,9 +578,12 @@ Server running at http://0.0.0.0:8080/
 | `QWEN_MODEL` | ❌ | `qwen-turbo` | 模型名称 |
 | `TEMPERATURE` | ❌ | `0.7` | 采样温度 |
 | `MAX_TOKENS` | ❌ | `2048` | 最大 Token 数 |
+| `DATABASE_URL` | ✅ | 内网连接串 | 必须启用 pgvector |
+| `PGSSLMODE` | ❌ | `no-verify` | 托管库要求 SSL 时 |
+| `DATA_DIR` | ✅ | `/app/data` | 仅 `prompts.json`；须与持久卷挂载路径一致 |
 | ~~`PORT`~~ | ❌ | **不要设置** | Sealos 自动注入 8080 |
 
-> ⚠️ 应用管理的环境变量与 DevBox 的 `.env` 文件**互相独立**，两边都要配。
+> ⚠️ 应用管理的环境变量与 DevBox 的 `.env` **互相独立**。会话在 Postgres，不配 `DATABASE_URL` 则进程起不来。`DATA_DIR` 不配则 Prompt 写进容器临时层，重启丢失。
 
 ---
 
@@ -653,6 +736,32 @@ npm error enoent Could not read package.json
 - 接受冷启动（省钱）
 - 或把最小实例设为 1（一直运行，多耗资源）
 
+### 9.12 重启后数据丢失
+
+**现象**：重启或重新发布后，会话列表变空，和/或 Prompt 实验室内容回到默认。
+
+**原因**：
+- 会话空了：`DATABASE_URL` 没配、配错，或连到了会被重建的空库
+- Prompt 没了：未挂持久卷，或挂载路径与 `DATA_DIR` 不一致
+
+**解决**：
+1. 应用管理环境变量确认 `DATABASE_URL`（内网）与 DevBox 调试用的是同一套库（或接受空库 + 种子迁移）
+2. 持久卷挂到 `/app/data`，`DATA_DIR=/app/data`
+3. 按 6.5.4 验证：发一条对话 + 编辑 Prompt，重启后再看
+
+### 9.13 库里已有数据，种子不导入
+
+**现象**：换了部署后仍是旧会话/旧知识库，`knowledge.json` 种子没有出现。
+
+**原因**：[db.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/data/db.js) 只在 **表为空** 且 JSON 种子存在时迁移，不会覆盖已有行。
+
+**解决**：确认要清空后再导入：
+
+```bash
+psql "$DATABASE_URL" -c 'TRUNCATE sessions, messages, kb_entries CASCADE;'
+# 重启应用，空表会再从 history.json / knowledge.json 迁移
+```
+
 ---
 
 ## 十、更新代码后的重新部署
@@ -746,7 +855,7 @@ bash /home/devbox/project/entrypoint.sh
 # 看到 Server running 后 Ctrl+C
 
 # 7. 回 DevBox 项目页面点「上线」
-# 8. 应用管理配置：容器端口 8080、最小实例 0、环境变量（不含 PORT）
+# 8. 应用管理：容器端口 8080、最小实例 0；环境变量含 DATABASE_URL（勿设 PORT）；DATA_DIR=/app/data + 持久卷挂 /app/data
 ```
 
 ---

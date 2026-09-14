@@ -1,143 +1,186 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '..');
-const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
-
 /**
- * 简单的 JSON 文件存储
+ * 对话历史存储层（PostgreSQL 版）
  *
- * 【说明】：
- * 学习项目用 JSON 文件存储对话历史，简单直观。
- * 生产环境应使用数据库（如 SQLite、MongoDB、PostgreSQL）。
+ * 【相对旧 JSON / SQLite 版】：
+ * - pg 是异步 API，所有函数均为 async，路由层需 await
+ * - 消息用自增 seq 列保证插入顺序
+ *
+ * 【保持不变】：
+ * - 导出函数的返回值结构与旧版一致，仅从同步变异步
  */
 
-// 确保数据目录和文件存在
-function ensureStore() {
-  if (!fs.existsSync(HISTORY_FILE)) {
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify({ sessions: [] }, null, 2), 'utf-8');
+import { query, withTransaction } from './db.js';
+
+function mapMessage(m) {
+  return {
+    ...m,
+    usage: m.usage ? JSON.parse(m.usage) : undefined,
+    toolSteps: m.toolSteps ? JSON.parse(m.toolSteps) : undefined,
+  };
+}
+
+async function getMessages(sessionId) {
+  const res = await query('SELECT * FROM messages WHERE "sessionId" = $1 ORDER BY seq ASC', [sessionId]);
+  return res.rows.map(mapMessage);
+}
+
+/**
+ * 会话列表（不含消息正文，带 messageCount）
+ */
+export async function listSessionSummaries() {
+  const res = await query(`
+    SELECT
+      s.id,
+      s.title,
+      s."createdAt",
+      s."updatedAt",
+      COUNT(m.id)::int AS "messageCount"
+    FROM sessions s
+    LEFT JOIN messages m ON m."sessionId" = s.id
+    GROUP BY s.id
+    ORDER BY s."updatedAt" DESC
+  `);
+  return { sessions: res.rows };
+}
+
+/**
+ * 读取所有会话（带消息，保持与旧版返回结构一致）
+ * @returns {Promise<{ sessions: object[] }>}
+ */
+export async function readAllSessions() {
+  const sessionsRes = await query('SELECT * FROM sessions ORDER BY "updatedAt" DESC');
+  const messagesRes = await query('SELECT * FROM messages ORDER BY seq ASC');
+  const bySession = new Map();
+  for (const m of messagesRes.rows) {
+    const list = bySession.get(m.sessionId) || [];
+    list.push(mapMessage(m));
+    bySession.set(m.sessionId, list);
   }
-}
-
-/**
- * 读取所有会话
- */
-export function readAllSessions() {
-  ensureStore();
-  const data = fs.readFileSync(HISTORY_FILE, 'utf-8');
-  return JSON.parse(data);
-}
-
-/**
- * 保存所有会话
- */
-function writeAllSessions(data) {
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  return {
+    sessions: sessionsRes.rows.map((s) => ({
+      ...s,
+      messages: bySession.get(s.id) || [],
+    })),
+  };
 }
 
 /**
  * 创建新会话
  * @param {string} title - 会话标题
- * @returns {object} 新会话对象
+ * @returns {Promise<object>} 新会话对象（含空 messages 数组）
  */
-export function createSession(title = '新对话') {
-  const store = readAllSessions();
+export async function createSession(title = '新对话') {
+  const now = new Date().toISOString();
   const session = {
     id: `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     title,
     messages: [],
-    // 【AI 学习要点 - 长对话摘要压缩】：
-    // summary 存早期对话的压缩摘要，summaryUpTo 标记摘要覆盖到第几条 user/assistant 消息。
-    // 构造 messages 时用"summary + 最近 N 条原文"，避免历史线性增长爆 token。
-    // 触发与构造逻辑见 server/src/routes/chat.js。
     summary: '',
     summaryUpTo: 0,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    createdAt: now,
+    updatedAt: now,
   };
-  store.sessions.unshift(session);
-  writeAllSessions(store);
+  await query(
+    `INSERT INTO sessions (id, title, summary, "summaryUpTo", "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [session.id, session.title, session.summary, session.summaryUpTo, session.createdAt, session.updatedAt]
+  );
   return session;
 }
 
 /**
- * 获取单个会话
+ * 获取单个会话（含完整消息）
+ * @param {string} sessionId
+ * @returns {Promise<object|null>}
  */
-export function getSession(sessionId) {
-  const store = readAllSessions();
-  return store.sessions.find((s) => s.id === sessionId) || null;
+export async function getSession(sessionId) {
+  const res = await query('SELECT * FROM sessions WHERE id = $1', [sessionId]);
+  const row = res.rows[0];
+  if (!row) return null;
+  return { ...row, messages: await getMessages(sessionId) };
 }
 
 /**
  * 追加消息到会话
- * @param {string} sessionId - 会话 ID
- * @param {object} message - {role, content, usage?}
+ * @param {string} sessionId
+ * @param {object} message - {role, content, usage?, toolSteps?}
+ * @returns {Promise<object|null>} 更新后的 session
  */
-export function appendMessage(sessionId, message) {
-  const store = readAllSessions();
-  const session = store.sessions.find((s) => s.id === sessionId);
-  if (!session) return null;
+export async function appendMessage(sessionId, message) {
+  const now = new Date().toISOString();
+  const inserted = await withTransaction(async (client) => {
+    const sessionRes = await client.query('SELECT * FROM sessions WHERE id = $1 FOR UPDATE', [sessionId]);
+    const session = sessionRes.rows[0];
+    if (!session) return null;
 
-  session.messages.push({
-    id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    ...message,
-    createdAt: new Date().toISOString(),
+    await client.query(
+      `INSERT INTO messages (id, "sessionId", role, content, usage, "toolSteps", "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        sessionId,
+        message.role,
+        message.content || '',
+        message.usage ? JSON.stringify(message.usage) : null,
+        message.toolSteps ? JSON.stringify(message.toolSteps) : null,
+        now,
+      ]
+    );
+
+    if (message.role === 'user' && session.title === '新对话') {
+      await client.query('UPDATE sessions SET title = $1, "updatedAt" = $2 WHERE id = $3', [
+        message.content.slice(0, 20),
+        now,
+        sessionId,
+      ]);
+    } else {
+      await client.query('UPDATE sessions SET "updatedAt" = $1 WHERE id = $2', [now, sessionId]);
+    }
+    return true;
   });
-  session.updatedAt = new Date().toISOString();
 
-  // 第一条用户消息自动作为会话标题
-  if (message.role === 'user' && session.title === '新对话') {
-    session.title = message.content.slice(0, 20);
-  }
-
-  writeAllSessions(store);
-  return session;
+  if (!inserted) return null;
+  return getSession(sessionId);
 }
 
 /**
- * 删除会话
+ * 删除会话（级联删除消息）
+ * @param {string} sessionId
+ * @returns {Promise<boolean>} 是否删除成功
  */
-export function deleteSession(sessionId) {
-  const store = readAllSessions();
-  const before = store.sessions.length;
-  store.sessions = store.sessions.filter((s) => s.id !== sessionId);
-  writeAllSessions(store);
-  return store.sessions.length < before;
+export async function deleteSession(sessionId) {
+  const res = await query('DELETE FROM sessions WHERE id = $1', [sessionId]);
+  return res.rowCount > 0;
 }
 
 /**
  * 更新会话标题
+ * @returns {Promise<object|null>}
  */
-export function updateSessionTitle(sessionId, title) {
-  const store = readAllSessions();
-  const session = store.sessions.find((s) => s.id === sessionId);
-  if (!session) return null;
-  session.title = title;
-  session.updatedAt = new Date().toISOString();
-  writeAllSessions(store);
-  return session;
+export async function updateSessionTitle(sessionId, title) {
+  const now = new Date().toISOString();
+  const res = await query('UPDATE sessions SET title = $1, "updatedAt" = $2 WHERE id = $3', [
+    title,
+    now,
+    sessionId,
+  ]);
+  if (res.rowCount === 0) return null;
+  return getSession(sessionId);
 }
 
 /**
  * 更新会话的对话摘要
- * @param {string} sessionId - 会话 ID
+ * @param {string} sessionId
  * @param {string} summary - 新摘要文本
- * @param {number} summaryUpTo - 摘要覆盖到的历史消息数（user/assistant 计数）
- * @returns {object|null} 更新后的 session
- *
- * 【AI 学习要点 - 长对话摘要压缩】：
- * 把早期对话压缩成一段摘要文本存起来，构造 messages 时用它替代早期原文。
- * summaryUpTo 标记摘要覆盖到第几条 user/assistant 消息，避免重复摘要同一段历史。
+ * @param {number} summaryUpTo - 摘要覆盖到的历史消息数
+ * @returns {Promise<object|null>}
  */
-export function updateSessionSummary(sessionId, summary, summaryUpTo) {
-  const store = readAllSessions();
-  const session = store.sessions.find((s) => s.id === sessionId);
-  if (!session) return null;
-  session.summary = summary;
-  session.summaryUpTo = summaryUpTo;
-  session.updatedAt = new Date().toISOString();
-  writeAllSessions(store);
-  return session;
+export async function updateSessionSummary(sessionId, summary, summaryUpTo) {
+  const now = new Date().toISOString();
+  const res = await query(
+    'UPDATE sessions SET summary = $1, "summaryUpTo" = $2, "updatedAt" = $3 WHERE id = $4',
+    [summary, summaryUpTo, now, sessionId]
+  );
+  if (res.rowCount === 0) return null;
+  return getSession(sessionId);
 }
