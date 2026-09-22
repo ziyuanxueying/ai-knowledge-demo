@@ -27,6 +27,7 @@ const { Pool } = pg;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// 连接参数来自 server/.env 的 DATABASE_URL 或 PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD
 export const pool = new Pool(config.postgres);
 
 pool.on('error', (err) => {
