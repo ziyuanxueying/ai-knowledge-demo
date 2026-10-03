@@ -14,10 +14,24 @@ export default function Sidebar({
   onOpenKnowledge,
   onOpenPrompt,
   onOpenCompare,
+  onClose,
 }) {
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" aria-label="主导航">
       <div className="sidebar-header">
+        <div className="sidebar-header-top">
+          <span className="sidebar-brand">前端知识库</span>
+          {onClose && (
+            <button
+              type="button"
+              className="sidebar-close-btn"
+              onClick={onClose}
+              aria-label="关闭菜单"
+            >
+              ×
+            </button>
+          )}
+        </div>
         <button type="button" className="new-chat-btn" onClick={onNewChat}>
           + 新建对话
         </button>

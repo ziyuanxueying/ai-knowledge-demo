@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getPrompts, getPrompt, updatePromptApi } from '../utils/api.js';
+import MenuButton from './MenuButton.jsx';
 
 /**
  * Prompt 实验室
@@ -16,7 +17,7 @@ import { getPrompts, getPrompt, updatePromptApi } from '../utils/api.js';
  * - 保存后展示渲染后效果（{{}} 已被替换为真实值）
  * - 「返回」回到聊天视图
  */
-export default function PromptLab({ onBack }) {
+export default function PromptLab({ onBack, onOpenMenu }) {
   const [scenarios, setScenarios] = useState([]);
   const [vars, setVars] = useState([]);
   const [currentId, setCurrentId] = useState(null);
@@ -88,9 +89,12 @@ export default function PromptLab({ onBack }) {
   return (
     <div className="prompt-lab">
       <header className="prompt-lab-header">
-        <button type="button" className="back-btn" onClick={onBack}>
-          ← 返回聊天
-        </button>
+        <div className="lab-header-bar">
+          <MenuButton onClick={onOpenMenu} />
+          <button type="button" className="back-btn" onClick={onBack}>
+            ← 返回聊天
+          </button>
+        </div>
         <h2>🧪 Prompt 实验室</h2>
         <p className="prompt-lab-subtitle">
           在线编辑 System Prompt，保存后立即生效，无需重启后端

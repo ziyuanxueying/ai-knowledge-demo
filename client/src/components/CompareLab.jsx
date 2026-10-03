@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
 import { getPrompts, sendCompareMessage } from '../utils/api.js';
+import MenuButton from './MenuButton.jsx';
 
 /**
  * A/B 对比实验室（方案 D + 方案 E 裁判评分）
@@ -19,7 +20,7 @@ import { getPrompts, sendCompareMessage } from '../utils/api.js';
 
 const EMPTY_RESULT = { status: 'idle', content: '', usage: null, elapsedMs: null, chars: 0 };
 
-export default function CompareLab({ onBack }) {
+export default function CompareLab({ onBack, onOpenMenu }) {
   const [scenarios, setScenarios] = useState([]);
   const [scenario, setScenario] = useState('frontend_dev');
   const [question, setQuestion] = useState('');
@@ -137,9 +138,12 @@ export default function CompareLab({ onBack }) {
   return (
     <div className="compare-lab">
       <header className="compare-lab-header">
-        <button type="button" className="back-btn" onClick={onBack}>
-          ← 返回聊天
-        </button>
+        <div className="lab-header-bar">
+          <MenuButton onClick={onOpenMenu} />
+          <button type="button" className="back-btn" onClick={onBack}>
+            ← 返回聊天
+          </button>
+        </div>
         <h2>⚡ A/B 对比实验室</h2>
         <p className="compare-lab-subtitle">
           同一个问题用两套参数并行请求，左右两栏同时流式输出；可开启 AI 裁判按 4 个维度自动打分。

@@ -8,6 +8,7 @@ import {
   searchKnowledge,
   regenerateKbEmbeddings,
 } from '../utils/api.js';
+import MenuButton from './MenuButton.jsx';
 
 /**
  * 知识库管理界面（RAG 升级版）
@@ -21,7 +22,7 @@ import {
  *
  * 数据结构：{ id, title, keywords: [], category, content, createdAt, updatedAt }
  */
-export default function KnowledgeBase({ onBack }) {
+export default function KnowledgeBase({ onBack, onOpenMenu }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -172,6 +173,7 @@ export default function KnowledgeBase({ onBack }) {
   return (
     <div className="kb-view">
       <div className="kb-header">
+        <MenuButton onClick={onOpenMenu} />
         <button type="button" className="kb-back-btn" onClick={onBack}>
           ← 返回对话
         </button>

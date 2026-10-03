@@ -7,6 +7,7 @@ import PromptLab from './components/PromptLab.jsx';
 import CompareLab from './components/CompareLab.jsx';
 import MessagePreview from './components/MessagePreview.jsx';
 import ParamPanel from './components/ParamPanel.jsx';
+import MenuButton from './components/MenuButton.jsx';
 import { useChat } from './hooks/useChat.js';
 import { useAgent } from './hooks/useAgent.js';
 import { getPrompts } from './utils/api.js';
@@ -19,6 +20,7 @@ import { getPrompts } from './utils/api.js';
 export default function App() {
   const [view, setView] = useState('chat'); // 'chat' | 'knowledge' | 'prompt'
   const [mode, setMode] = useState('chat'); // 'chat' | 'agent'
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const chat = useChat();
   const agent = useAgent();
 
@@ -57,6 +59,18 @@ export default function App() {
       .catch(() => setApiReady(false));
   }, []);
 
+  const closeSidebar = () => setSidebarOpen(false);
+  const openSidebar = () => setSidebarOpen(true);
+
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') closeSidebar();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sidebarOpen]);
+
   const handleSend = (text) => {
     if (isAgent) {
       agent.sendTask(text);
@@ -76,6 +90,7 @@ export default function App() {
   // 新建对话：切回 chat 视图（在知识库视图点新建对话应回到聊天）
   const handleNewChat = () => {
     setView('chat');
+    closeSidebar();
     if (isAgent) {
       agent.newChat();
     } else {
@@ -86,6 +101,7 @@ export default function App() {
   // 切换会话：同时切回 chat 视图
   const handleSwitchSession = (id) => {
     setView('chat');
+    closeSidebar();
     chat.switchSession(id);
   };
 
@@ -101,7 +117,15 @@ export default function App() {
   };
 
   return (
-    <div className="app">
+    <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
+      <button
+        type="button"
+        className="sidebar-backdrop"
+        aria-label="关闭菜单"
+        aria-hidden={!sidebarOpen}
+        tabIndex={sidebarOpen ? 0 : -1}
+        onClick={closeSidebar}
+      />
       <Sidebar
         sessions={sessions}
         currentSessionId={currentSessionId}
@@ -109,23 +133,38 @@ export default function App() {
         onSwitch={handleSwitchSession}
         onDelete={chat.removeSession}
         view={view}
-        onOpenKnowledge={() => setView('knowledge')}
-        onOpenPrompt={() => setView('prompt')}
-        onOpenCompare={() => setView('compare')}
+        onClose={closeSidebar}
+        onOpenKnowledge={() => {
+          setView('knowledge');
+          closeSidebar();
+        }}
+        onOpenPrompt={() => {
+          setView('prompt');
+          closeSidebar();
+        }}
+        onOpenCompare={() => {
+          setView('compare');
+          closeSidebar();
+        }}
       />
 
       <main className="main">
         {view === 'knowledge' ? (
-          <KnowledgeBase onBack={() => setView('chat')} />
+          <KnowledgeBase onBack={() => setView('chat')} onOpenMenu={openSidebar} />
         ) : view === 'prompt' ? (
-          <PromptLab onBack={() => setView('chat')} />
+          <PromptLab onBack={() => setView('chat')} onOpenMenu={openSidebar} />
         ) : view === 'compare' ? (
-          <CompareLab onBack={() => setView('chat')} />
+          <CompareLab onBack={() => setView('chat')} onOpenMenu={openSidebar} />
         ) : (
           <>
             <div className="chat-header">
-              <span className="dot" />
-              <span>{isAgent ? 'Agent 模式 · 在线' : `${currentScenarioName} 在线`}</span>
+              <MenuButton onClick={openSidebar} />
+              <span className="chat-header-status">
+                <span className="dot" />
+                <span className="chat-header-title">
+                  {isAgent ? 'Agent 模式 · 在线' : `${currentScenarioName} 在线`}
+                </span>
+              </span>
               <div className="mode-switch">
                 <button
                   type="button"
