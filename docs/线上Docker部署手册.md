@@ -234,29 +234,7 @@ server {
         root /var/www/certbot;
     }
 
-    location /api/chat {
-        proxy_pass http://app_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 300s;
-    }
-
-    location /api/agent {
-        proxy_pass http://app_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 300s;
-    }
-
-    location /api/compare {
+    location /api/ {
         proxy_pass http://app_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -278,7 +256,7 @@ server {
 }
 ```
 
-`/api/chat`、`/api/agent`、`/api/compare` 必须 `proxy_buffering off`。否则对话会「卡很久然后一次性出字」（SSE 被 Nginx 攒着）。
+`/api/` 必须 `proxy_buffering off`，且 `proxy_pass` 不要写成 `http://app_upstream/;`（结尾斜杠会把 `/api/` 前缀剥掉，后端收不到原路径）。缓冲开着时，对话会「卡很久然后一次性出字」（SSE 被 Nginx 攒着）。
 
 ### 8.3 `deploy/docker-compose.prod.yml`
 
@@ -464,29 +442,7 @@ server {
 
     client_max_body_size 1m;
 
-    location /api/chat {
-        proxy_pass http://app_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 300s;
-    }
-
-    location /api/agent {
-        proxy_pass http://app_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 300s;
-    }
-
-    location /api/compare {
+    location /api/ {
         proxy_pass http://app_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -664,7 +620,7 @@ docker compose -f docker-compose.prod.yml exec -T postgres \
 | `/api/health` 里 `db` 不是 ok | 库还没好或连错 | `logs postgres`；等 `ps` 里 postgres 为 healthy |
 | 网站是一段 JSON（name、endpoints） | 镜像里没有 `client/dist` | 确认 Dockerfile 有 COPY dist；构建 context 是仓库根 `..` |
 | 页面有，对话报 Key / 鉴权错误 | `prod.env` 没进容器 | `docker compose -f docker-compose.prod.yml exec app printenv DASHSCOPE_API_KEY` |
-| 对话卡很久再一次性出字 | SSE 被缓冲 | 确认 nginx 里三个 `/api/...` 有 `proxy_buffering off` |
+| 对话卡很久再一次性出字 | SSE 被缓冲 | 确认 nginx 里 `/api/` 有 `proxy_buffering off`，且 `proxy_pass` 没有结尾斜杠 |
 | 本机 curl 通、外网不通 | 安全组或 ufw | 回步骤 4 |
 | certbot 失败 | DNS 或 80 不通 | 回步骤 5、10；先 `curl http://YOUR_DOMAIN` |
 | nginx 起不来，抱怨 ssl 证书文件 | 还没申请证书就挂了 `nginx.conf` | 先用步骤 8.2 的 HTTP 配置，做完步骤 11 再换 |
