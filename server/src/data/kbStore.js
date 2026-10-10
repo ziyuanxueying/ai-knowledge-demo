@@ -11,12 +11,10 @@
  * - 关键词检索、相似度阈值、Top-K 等逻辑不变
  */
 
+import { config } from '../config/index.js';
 import { query as sql, withTransaction, toVectorSql } from './db.js';
-import {
-  embedTexts,
-  embedQuery,
-  hasEmbeddingConfig,
-} from '../services/embedding.service.js';
+import { embedTexts, hasEmbeddingConfig } from '../services/embedding.service.js';
+import { buildChildEmbedText, chunkDocument } from '../rag/chunker.js';
 
 // 种子数据：表为空且没有 knowledge.json 时写入，让 Agent 有内容可搜
 const SEED_ENTRIES = [
@@ -64,7 +62,7 @@ const SEED_ENTRIES = [
   },
 ];
 
-const ENTRY_COLS = 'id, title, keywords, category, content, "createdAt", "updatedAt"';
+const ENTRY_COLS = 'id, title, keywords, category, content, "sourceType", "sourceUrl", "cosKey", "ingestStatus", "ingestError", "createdAt", "updatedAt"';
 
 function genId() {
   return `kb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -83,12 +81,56 @@ function parseEmbedding(value) {
   return null;
 }
 
-/**
- * 构造用于生成向量的文本：把标题/分类/关键词/内容拼成一段
- */
-function buildEmbedText(entry) {
-  const kw = (entry.keywords || []).join('、');
-  return `标题：${entry.title || ''}\n分类：${entry.category || ''}\n关键词：${kw}\n内容：${entry.content || ''}`;
+async function getEntryWithCounts(id) {
+  const res = await sql(
+    `SELECT ${ENTRY_COLS},
+            (SELECT COUNT(*)::int FROM kb_chunks p WHERE p."entryId" = kb_entries.id AND p."parentId" IS NULL) AS "parentCount",
+            (SELECT COUNT(*)::int FROM kb_chunks c WHERE c."entryId" = kb_entries.id AND c."parentId" IS NOT NULL) AS "childCount"
+     FROM kb_entries WHERE id = $1`,
+    [id]
+  );
+  return rowToEntry(res.rows[0]);
+}
+
+async function embedPendingChildren(entryId) {
+  const params = [config.dashscope.embeddingModel];
+  let where = `c."parentId" IS NOT NULL AND (c.embedding IS NULL OR c.embedding_model IS DISTINCT FROM $1)`;
+  if (entryId) {
+    params.push(entryId);
+    where += ` AND c."entryId" = $2`;
+  }
+  const missing = (
+    await sql(
+      `SELECT c.id, c.heading, c.content, e.title
+       FROM kb_chunks c
+       JOIN kb_entries e ON e.id = c."entryId"
+       WHERE ${where}`,
+      params
+    )
+  ).rows;
+  if (missing.length === 0 || !hasEmbeddingConfig()) return;
+  if (missing.some((row) => row)) {
+    await sql(
+      `UPDATE kb_chunks
+       SET embedding = NULL, embedding_model = NULL
+       WHERE "parentId" IS NOT NULL
+         AND embedding_model IS NOT NULL
+         AND embedding_model IS DISTINCT FROM $1
+         ${entryId ? 'AND "entryId" = $2' : ''}`,
+      params
+    );
+  }
+  const pending = (
+    await sql(
+      `SELECT c.id, c.heading, c.content, e.title
+       FROM kb_chunks c
+       JOIN kb_entries e ON e.id = c."entryId"
+       WHERE c."parentId" IS NOT NULL AND c.embedding IS NULL
+         ${entryId ? 'AND c."entryId" = $1' : ''}`,
+      entryId ? [entryId] : []
+    )
+  ).rows;
+  await embedChildRows(pending);
 }
 
 /**
@@ -102,8 +144,15 @@ function rowToEntry(row, { stripEmbedding = true } = {}) {
     keywords: JSON.parse(row.keywords || '[]'),
     category: row.category,
     content: row.content,
+    sourceType: row.sourceType || 'manual',
+    sourceUrl: row.sourceUrl || '',
+    cosKey: row.cosKey || '',
+    ingestStatus: row.ingestStatus || 'ready',
+    ingestError: row.ingestError || '',
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    parentCount: row.parentCount == null ? undefined : Number(row.parentCount),
+    childCount: row.childCount == null ? undefined : Number(row.childCount),
   };
   if (!stripEmbedding && row.embedding) {
     entry.embedding = parseEmbedding(row.embedding);
@@ -111,21 +160,97 @@ function rowToEntry(row, { stripEmbedding = true } = {}) {
   return entry;
 }
 
+function genChunkId() {
+  return `chk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
 /**
- * 为单条条目生成并保存向量
+ * 删掉文档旧块，按当前正文重新写入父子块。向量稍后单独转化。
  */
-async function embedEntry(id, entry) {
-  if (!hasEmbeddingConfig()) {
-    return null;
+async function replaceEntryChunks(entry) {
+  const parents = chunkDocument(entry.content);
+  const now = new Date().toISOString();
+  await withTransaction(async (client) => {
+    await client.query('DELETE FROM kb_chunks WHERE "entryId" = $1 AND "parentId" IS NOT NULL', [entry.id]);
+    await client.query('DELETE FROM kb_chunks WHERE "entryId" = $1', [entry.id]);
+    for (let i = 0; i < parents.length; i++) {
+      const parent = parents[i];
+      const parentId = genChunkId();
+      await client.query(
+        `INSERT INTO kb_chunks
+           (id, "entryId", "parentId", "chunkIndex", heading, content, "charStart", "charEnd", embedding, embedding_model, "createdAt")
+         VALUES ($1, $2, NULL, $3, $4, $5, 0, $6, NULL, NULL, $7)`,
+        [parentId, entry.id, i, parent.heading, parent.content, parent.content.length, now]
+      );
+      for (let j = 0; j < parent.children.length; j++) {
+        const child = parent.children[j];
+        await client.query(
+          `INSERT INTO kb_chunks
+             (id, "entryId", "parentId", "chunkIndex", heading, content, "charStart", "charEnd", embedding, embedding_model, "createdAt")
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL, $9)`,
+          [
+            genChunkId(),
+            entry.id,
+            parentId,
+            j,
+            parent.heading,
+            child.content,
+            child.charStart,
+            child.charEnd,
+            now,
+          ]
+        );
+      }
+    }
+  });
+}
+
+async function embedInBatches(texts) {
+  const out = new Array(texts.length).fill(null);
+  for (let i = 0; i < texts.length; i += 10) {
+    const slice = texts.slice(i, i + 10);
+    try {
+      const vectors = await embedTexts(slice);
+      vectors.forEach((vector, j) => {
+        out[i + j] = vector || null;
+      });
+    } catch {
+      for (let j = 0; j < slice.length; j++) {
+        try {
+          const [vector] = await embedTexts([slice[j]]);
+          out[i + j] = vector || null;
+        } catch {
+          out[i + j] = null;
+        }
+      }
+    }
   }
-  try {
-    const [vector] = await embedTexts([buildEmbedText(entry)]);
-    await sql('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [toVectorSql(vector), id]);
-    return vector;
-  } catch {
-    await sql('UPDATE kb_entries SET embedding = NULL WHERE id = $1', [id]);
-    return null;
-  }
+  return out;
+}
+
+/**
+ * 只给还没有向量、且模型对得上的子块做转化。
+ */
+async function embedChildRows(rows) {
+  if (!hasEmbeddingConfig() || rows.length === 0) return;
+  const texts = rows.map((row) =>
+    buildChildEmbedText(
+      { title: row.title },
+      { heading: row.heading, content: row.content }
+    )
+  );
+  const vectors = await embedInBatches(texts);
+  const model = config.dashscope.embeddingModel;
+  await withTransaction(async (client) => {
+    for (let i = 0; i < rows.length; i++) {
+      const vector = vectors[i];
+      if (!vector) continue;
+      await client.query(
+        'UPDATE kb_chunks SET embedding = $1::vector, embedding_model = $2 WHERE id = $3',
+        [toVectorSql(vector), model, rows[i].id]
+      );
+    }
+  });
 }
 
 /**
@@ -153,7 +278,13 @@ export async function seedIfEmpty() {
  * 列出全部条目（按更新时间倒序，剥离向量）
  */
 export async function listEntries() {
-  const res = await sql(`SELECT ${ENTRY_COLS} FROM kb_entries ORDER BY "updatedAt" DESC`);
+  const res = await sql(
+    `SELECT ${ENTRY_COLS},
+            (SELECT COUNT(*)::int FROM kb_chunks p WHERE p."entryId" = kb_entries.id AND p."parentId" IS NULL) AS "parentCount",
+            (SELECT COUNT(*)::int FROM kb_chunks c WHERE c."entryId" = kb_entries.id AND c."parentId" IS NOT NULL) AS "childCount"
+     FROM kb_entries
+     ORDER BY "updatedAt" DESC`
+  );
   return res.rows.map((r) => rowToEntry(r));
 }
 
@@ -183,9 +314,9 @@ export async function createEntry({ title, keywords = [], category = '', content
      VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)`,
     [entry.id, entry.title, JSON.stringify(entry.keywords), entry.category, entry.content, now, now]
   );
-  await embedEntry(id, entry);
-  const res = await sql(`SELECT ${ENTRY_COLS} FROM kb_entries WHERE id = $1`, [id]);
-  return rowToEntry(res.rows[0]);
+  await replaceEntryChunks(entry);
+  await embedPendingChildren(entry.id);
+  return getEntryWithCounts(id);
 }
 
 /**
@@ -211,9 +342,9 @@ export async function updateEntry(id, patch) {
      WHERE id = $6`,
     [entry.title, JSON.stringify(entry.keywords), entry.category, entry.content, now, id]
   );
-  await embedEntry(id, entry);
-  const res = await sql(`SELECT ${ENTRY_COLS} FROM kb_entries WHERE id = $1`, [id]);
-  return rowToEntry(res.rows[0]);
+  await replaceEntryChunks(entry);
+  await embedPendingChildren(id);
+  return getEntryWithCounts(id);
 }
 
 /**
@@ -225,163 +356,115 @@ export async function deleteEntry(id) {
 }
 
 /**
- * 搜索条目 - 关键词匹配（title + keywords + content + category）
+ * 先占一条「解析中」的文档，正文等异步任务写回后再切块。
  */
-export async function searchEntries(queryText) {
-  if (!queryText) return [];
-  const q = String(queryText).toLowerCase();
-  const res = await sql(
-    `SELECT ${ENTRY_COLS} FROM kb_entries
-     WHERE strpos(lower(title), $1) > 0
-        OR strpos(lower(category), $1) > 0
-        OR strpos(lower(content), $1) > 0
-        OR strpos(lower(keywords), $1) > 0
-        OR EXISTS (
-             SELECT 1 FROM jsonb_array_elements_text(keywords::jsonb) AS kw
-             WHERE strpos($1, lower(kw)) > 0
-           )
-     ORDER BY "updatedAt" DESC`,
-    [q]
+export async function createPendingEntry({ title, sourceType, sourceUrl = '', category = '' }) {
+  const now = new Date().toISOString();
+  const id = genId();
+  await sql(
+    `INSERT INTO kb_entries
+       (id, title, keywords, category, content, embedding, "sourceType", "sourceUrl", "cosKey", "ingestStatus", "ingestError", "createdAt", "updatedAt")
+     VALUES ($1, $2, '[]', $3, '', NULL, $4, $5, '', 'pending', '', $6, $6)`,
+    [id, String(title || '').trim() || '未命名文档', String(category || '').trim(), sourceType, sourceUrl, now]
   );
-  return res.rows.map((row) => rowToEntry(row));
+  return getEntryWithCounts(id);
 }
 
-/**
- * 搜索条目 - 语义检索（RAG 核心，pgvector 余弦距离）
- */
-export async function searchEntriesSemantic(queryText, topK = 3, threshold = 0.3) {
-  if (!queryText) return [];
-  await ensureEmbeddings();
-
-  if (!hasEmbeddingConfig()) {
-    return (await searchEntries(queryText)).map((e) => ({ ...e, score: 0 }));
-  }
-
-  let qVec;
-  try {
-    qVec = await embedQuery(queryText);
-  } catch {
-    return (await searchEntries(queryText)).map((e) => ({ ...e, score: 0 }));
-  }
-
-  // <=> 是余弦距离（越小越相似），相似度 score = 1 - distance
-  // (distance <= 1 - threshold) 等价于 (score >= threshold)
-  const res = await sql(
-    `SELECT ${ENTRY_COLS.split(', ').map((c) => `k.${c}`).join(', ')},
-            1 - (k.embedding <=> q.v) AS score
-     FROM kb_entries k, (SELECT $1::vector AS v) AS q
-     WHERE k.embedding IS NOT NULL AND (k.embedding <=> q.v) <= $2
-     ORDER BY k.embedding <=> q.v
-     LIMIT $3`,
-    [toVectorSql(qVec), 1 - threshold, topK]
+/** 解析完成后写入正文、切块并转向量 */
+export async function completeIngest(id, { content, cosKey = '', title }) {
+  const existing = await getEntry(id);
+  if (!existing) return null;
+  const now = new Date().toISOString();
+  const nextTitle = title ? String(title).trim() : existing.title;
+  await sql(
+    `UPDATE kb_entries
+     SET title = $1, content = $2, "cosKey" = $3, "ingestStatus" = 'ready', "ingestError" = '', "updatedAt" = $4
+     WHERE id = $5`,
+    [nextTitle, String(content || ''), cosKey || existing.cosKey || '', now, id]
   );
+  const entry = { ...existing, title: nextTitle, content: String(content || '') };
+  await replaceEntryChunks(entry);
+  await embedPendingChildren(id);
+  return getEntryWithCounts(id);
+}
 
-  return res.rows.map((row) => ({
-    ...rowToEntry(row),
-    score: Number(Number(row.score).toFixed(4)),
-  }));
+export async function failIngest(id, message) {
+  if (!id) return;
+  await sql(
+    `UPDATE kb_entries SET "ingestStatus" = 'failed', "ingestError" = $1, "updatedAt" = $2 WHERE id = $3`,
+    [String(message || '解析失败').slice(0, 500), new Date().toISOString(), id]
+  );
 }
 
 /**
- * 检索对比：同时返回关键词检索与语义检索的结果
+ * 给还没有块的文档补父子块，清掉模型对不上的子块向量，再补齐缺失向量。
  */
-export async function searchCompare(queryText, topK = 3) {
-  if (!queryText) return { query: '', keyword: [], semantic: [] };
-  const keyword = await searchEntries(queryText);
-  let semantic = [];
-  try {
-    semantic = await searchEntriesSemantic(queryText, topK, 0);
-  } catch {
-    semantic = [];
+export async function syncChunks() {
+  const missing = await sql(
+    `SELECT ${ENTRY_COLS} FROM kb_entries e
+     WHERE e."ingestStatus" = 'ready'
+       AND NOT EXISTS (SELECT 1 FROM kb_chunks c WHERE c."entryId" = e.id)`
+  );
+  for (const row of missing.rows) {
+    await replaceEntryChunks(rowToEntry(row));
   }
-  return { query: queryText, keyword, semantic };
+  await sql(
+    `UPDATE kb_chunks
+     SET embedding = NULL, embedding_model = NULL
+     WHERE "parentId" IS NOT NULL
+       AND embedding_model IS NOT NULL
+       AND embedding_model IS DISTINCT FROM $1`,
+    [config.dashscope.embeddingModel]
+  );
+  await embedPendingChildren();
 }
 
 /**
- * 补齐所有缺失向量的条目（懒补齐）
+ * 补齐缺失的子块向量
  */
 export async function ensureEmbeddings() {
-  const missing = (await sql(`SELECT ${ENTRY_COLS} FROM kb_entries WHERE embedding IS NULL`)).rows;
-  if (missing.length === 0) return stats();
-  if (!hasEmbeddingConfig()) return stats();
-
-  const texts = missing.map((row) => buildEmbedText(rowToEntry(row)));
-  try {
-    const vectors = await embedTexts(texts);
-    await withTransaction(async (client) => {
-      for (let i = 0; i < missing.length; i++) {
-        if (vectors[i]) {
-          await client.query('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [
-            toVectorSql(vectors[i]),
-            missing[i].id,
-          ]);
-        }
-      }
-    });
-  } catch {
-    for (const row of missing) {
-      try {
-        const [v] = await embedTexts([buildEmbedText(rowToEntry(row))]);
-        await sql('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [toVectorSql(v), row.id]);
-      } catch {
-        // 置空，后续可重试
-      }
-    }
-  }
+  await embedPendingChildren();
   return stats();
 }
 
 /**
- * 重新生成全部条目的向量
+ * 按当前 embedding 模型重转全部子块
  */
 export async function regenerateAllEmbeddings() {
-  const allRows = (await sql(`SELECT ${ENTRY_COLS} FROM kb_entries`)).rows;
-  if (allRows.length === 0 || !hasEmbeddingConfig()) return stats();
-
-  const texts = allRows.map((row) => buildEmbedText(rowToEntry(row)));
-  try {
-    const vectors = await embedTexts(texts);
-    await withTransaction(async (client) => {
-      for (let i = 0; i < allRows.length; i++) {
-        await client.query('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [
-          vectors[i] ? toVectorSql(vectors[i]) : null,
-          allRows[i].id,
-        ]);
-      }
-    });
-  } catch {
-    for (const row of allRows) {
-      try {
-        const [v] = await embedTexts([buildEmbedText(rowToEntry(row))]);
-        await sql('UPDATE kb_entries SET embedding = $1::vector WHERE id = $2', [toVectorSql(v), row.id]);
-      } catch {
-        // 置空
-      }
-    }
-  }
+  await sql(
+    `UPDATE kb_chunks SET embedding = NULL, embedding_model = NULL WHERE "parentId" IS NOT NULL`
+  );
+  await embedPendingChildren();
   return stats();
 }
 
 /**
- * 统计：总数 / 已向量化 / 待向量化
+ * 统计子块向量化进度，以及当前 embedding 模型是否和库内一致
  */
 export async function stats() {
-  const total = (await sql('SELECT COUNT(*)::int AS c FROM kb_entries')).rows[0].c;
-  const embedded = (await sql('SELECT COUNT(*)::int AS c FROM kb_entries WHERE embedding IS NOT NULL')).rows[0].c;
-  return { total, embedded, pending: total - embedded };
-}
-
-/**
- * 把搜索结果格式化为给模型用的文本
- */
-export function formatSearchResultText(queryText, results) {
-  if (!results || results.length === 0) {
-    return `知识库中未找到与 "${queryText}" 相关的内容。`;
-  }
-  const parts = results.map((e, i) => {
-    const scoreText =
-      typeof e.score === 'number' && e.score > 0 ? `（相似度 ${e.score}）` : '';
-    return `【${i + 1}. ${e.title}】（分类：${e.category || '未分类'}）${scoreText}\n${e.content}`;
-  });
-  return `在知识库中找到 ${results.length} 条相关内容：\n\n${parts.join('\n\n')}`;
+  const res = await sql(
+    `SELECT
+       COUNT(*) FILTER (WHERE "parentId" IS NULL)::int AS parents,
+       COUNT(*) FILTER (WHERE "parentId" IS NOT NULL)::int AS children,
+       COUNT(*) FILTER (WHERE "parentId" IS NOT NULL AND embedding IS NOT NULL)::int AS embedded,
+       COUNT(*) FILTER (
+         WHERE "parentId" IS NOT NULL
+           AND embedding IS NOT NULL
+           AND embedding_model IS DISTINCT FROM $1
+       )::int AS stale
+     FROM kb_chunks`,
+    [config.dashscope.embeddingModel]
+  );
+  const row = res.rows[0] || {};
+  const children = row.children || 0;
+  const embedded = row.embedded || 0;
+  return {
+    total: children,
+    embedded,
+    pending: children - embedded,
+    parents: row.parents || 0,
+    children,
+    embeddingModel: config.dashscope.embeddingModel,
+    modelStale: (row.stale || 0) > 0,
+  };
 }

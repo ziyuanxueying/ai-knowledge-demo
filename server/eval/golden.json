@@ -1,0 +1,23 @@
+[
+  { "q": "虚拟DOM是什么", "expectTitle": "虚拟 DOM" },
+  { "q": "框架怎么高效更新 DOM", "expectTitle": "虚拟 DOM" },
+  { "q": "diff 算法在前端里做什么", "expectTitle": "虚拟 DOM" },
+  { "q": "React 和 Vue 都用什么描述界面", "expectTitle": "虚拟 DOM" },
+  { "q": "闭包是什么", "expectTitle": "闭包" },
+  { "q": "函数怎么记住外部变量", "expectTitle": "闭包" },
+  { "q": "闭包会造成内存泄漏吗", "expectTitle": "闭包" },
+  { "q": "词法环境被内部函数引用会怎样", "expectTitle": "闭包" },
+  { "q": "事件循环是什么", "expectTitle": "事件循环" },
+  { "q": "微任务和宏任务谁先执行", "expectTitle": "事件循环" },
+  { "q": "Promise.then 属于宏任务还是微任务", "expectTitle": "事件循环" },
+  { "q": "调用栈清空后先执行什么", "expectTitle": "事件循环" },
+  { "q": "useEffect 和 useLayoutEffect 的区别", "expectTitle": "useEffect 与 useLayoutEffect" },
+  { "q": "怎么避免布局闪烁", "expectTitle": "useEffect 与 useLayoutEffect" },
+  { "q": "useLayoutEffect 什么时候执行", "expectTitle": "useEffect 与 useLayoutEffect" },
+  { "q": "什么是服务端渲染", "expectTitle": "SSR 服务端渲染" },
+  { "q": "hydration 是什么", "expectTitle": "SSR 服务端渲染" },
+  { "q": "Next.js 和 Nuxt 提供什么渲染方式", "expectTitle": "SSR 服务端渲染" },
+  { "q": "Tree Shaking 是什么", "expectTitle": "Tree Shaking" },
+  { "q": "打包时怎么去掉无用代码", "expectTitle": "Tree Shaking" },
+  { "q": "sideEffects 和摇树有什么关系", "expectTitle": "Tree Shaking" }
+]

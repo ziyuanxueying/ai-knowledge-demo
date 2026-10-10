@@ -15,6 +15,7 @@ const router = Router();
  *   { type: 'session', sessionId }
  *   { type: 'thinking', step, plan: [{toolName, args}] }   // Agent 计划调用哪些工具
  *   { type: 'tool', step, toolName, args, result }          // 单个工具执行结果
+ *   { type: 'citations', citations }                        // 检索到来源（父块 + 子块高亮位置）
  *   { type: 'content', content }                            // 最终答案文本片段
  *   { type: 'usage', usage }                                // token 用量
  *   { type: 'aborted' }                                     // 被中断
@@ -73,6 +74,7 @@ router.post('/', async (req, res) => {
 
     let fullContent = '';
     let usage = null;
+    let citations = null;
     const steps = []; // 记录工具调用步骤，存入历史
 
     try {
@@ -95,6 +97,10 @@ router.post('/', async (req, res) => {
             res.write(`data: ${JSON.stringify(event)}\n\n`);
             break;
           }
+          case 'citations':
+            citations = event.citations;
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+            break;
           case 'content':
             fullContent += event.content;
             res.write(`data: ${JSON.stringify({ type: 'content', content: event.content })}\n\n`);
@@ -127,7 +133,8 @@ router.post('/', async (req, res) => {
       role: 'assistant',
       content: fullContent,
       usage,
-      agentSteps: steps.length > 0 ? steps : undefined,
+      toolSteps: steps.length > 0 ? steps : undefined,
+      citations: citations || undefined,
     });
 
     res.write(`data: ${JSON.stringify({ type: 'done', usage })}\n\n`);

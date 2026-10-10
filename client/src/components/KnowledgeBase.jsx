@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import {
   getKnowledgeEntries,
   createKnowledgeEntry,
@@ -7,8 +7,68 @@ import {
   getKbStats,
   searchKnowledge,
   regenerateKbEmbeddings,
+  uploadKnowledgeBinary,
+  ingestWebUrl,
+  ingestRepo,
+  getIngestConfig,
+  getIngestJobs,
 } from '../utils/api.js';
 import MenuButton from './MenuButton.jsx';
+
+/** 长文档正文固定约 6 行，超出后可展开全文再收起。 */
+function EntryContent({ content }) {
+  const ref = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    setOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [content, open]);
+
+  if (!content) return null;
+
+  return (
+    <>
+      <div
+        ref={ref}
+        className={`kb-item-content${open ? ' is-open' : ''}${overflows && !open ? ' is-clamped' : ''}`}
+      >
+        {content}
+      </div>
+      {overflows && (
+        <button type="button" className="kb-content-toggle" onClick={() => setOpen((value) => !value)}>
+          {open ? '收起' : '展开全文'}
+        </button>
+      )}
+    </>
+  );
+}
+
+function RagHits({ hits, empty = '无匹配' }) {
+  if (!hits.length) return <div className="kb-rag-empty">{empty}</div>;
+  return hits.map((hit) => (
+    <div key={hit.parentId || hit.id} className="kb-rag-result">
+      <div className="kb-rag-result-title">
+        {hit.title}
+        {hit.heading ? ` / ${hit.heading}` : ''}
+      </div>
+      {hit.category && <span className="kb-rag-result-cat">{hit.category}</span>}
+      {hit.childExcerpt && hit.childExcerpt !== hit.excerpt && (
+        <div className="kb-rag-hit">命中：{hit.childExcerpt.slice(0, 80)}</div>
+      )}
+      {typeof hit.score === 'number' && hit.score > 0 && (
+        <div className="kb-rag-score">
+          <div className="kb-rag-score-bar">
+            <div className="kb-rag-score-fill" style={{ width: `${Math.min(hit.score * 100, 100)}%` }} />
+          </div>
+          <span className="kb-rag-score-num">{hit.score}</span>
+        </div>
+      )}
+    </div>
+  ));
+}
 
 /**
  * 知识库管理界面（RAG 升级版）
@@ -32,11 +92,16 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
   const [error, setError] = useState(null);
 
   // RAG 相关状态
-  const [kbStats, setKbStats] = useState({ total: 0, embedded: 0, pending: 0 });
+  const [kbStats, setKbStats] = useState({ total: 0, embedded: 0, pending: 0, embeddingModel: '', modelStale: false });
   const [ragQuery, setRagQuery] = useState('');
   const [ragResults, setRagResults] = useState(null); // { query, keyword: [], semantic: [] }
   const [ragLoading, setRagLoading] = useState(false);
   const [embeddingLoading, setEmbeddingLoading] = useState(false);
+  const [webUrl, setWebUrl] = useState('');
+  const [repoUrl, setRepoUrl] = useState('');
+  const [repoBranch, setRepoBranch] = useState('');
+  const [ingestConfig, setIngestConfig] = useState({ cosConfigured: true, missing: [] });
+  const [jobs, setJobs] = useState([]);
 
   const refreshStats = useCallback(async () => {
     try {
@@ -51,8 +116,14 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
     setLoading(true);
     setError(null);
     try {
-      const { entries } = await getKnowledgeEntries();
+      const [{ entries }, config, jobData] = await Promise.all([
+        getKnowledgeEntries(),
+        getIngestConfig(),
+        getIngestJobs(),
+      ]);
       setEntries(entries || []);
+      setIngestConfig(config || { cosConfigured: false, missing: [] });
+      setJobs(jobData?.jobs || []);
       await refreshStats();
     } catch (e) {
       setError(`加载失败：${e.message}`);
@@ -64,6 +135,22 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  const busy = entries.some((entry) => entry.ingestStatus === 'pending' || entry.ingestStatus === 'parsing')
+    || jobs.some((job) => job.status === 'pending' || job.status === 'running');
+
+  useEffect(() => {
+    if (!busy) return undefined;
+    const timer = setInterval(() => {
+      Promise.all([getKnowledgeEntries(), getIngestJobs()])
+        .then(([entryData, jobData]) => {
+          setEntries(entryData.entries || []);
+          setJobs(jobData.jobs || []);
+        })
+        .catch(() => {});
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [busy]);
 
   const filtered = search
     ? entries.filter((e) => {
@@ -178,9 +265,99 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
           ← 返回对话
         </button>
         <h2>📚 知识库管理</h2>
+        <label className="kb-add-btn kb-upload-btn">
+          上传文件
+          <input
+            type="file"
+            accept=".pdf,.docx,.pptx,.md,.txt,.html,.htm,.csv,application/pdf"
+            hidden
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (!file) return;
+              setError(null);
+              try {
+                const data = await uploadKnowledgeBinary(file);
+                if (data.error) throw new Error(data.error);
+                await load();
+              } catch (e) {
+                setError(`上传失败：${e.message}`);
+              }
+            }}
+          />
+        </label>
         <button type="button" className="kb-add-btn" onClick={startCreate}>
           + 新增条目
         </button>
+      </div>
+
+      {!ingestConfig.cosConfigured && (
+        <div className="kb-error">
+          原文要存到腾讯云 COS。请在 server/.env 填写 {ingestConfig.missing?.join('、') || 'COS 配置'} 后重启服务。
+        </div>
+      )}
+
+      <div className="kb-ingest">
+        <form
+          className="kb-ingest-row"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setError(null);
+            try {
+              const data = await ingestWebUrl(webUrl.trim());
+              if (data.error) throw new Error(data.error);
+              setWebUrl('');
+              await load();
+            } catch (e) {
+              setError(`网页入库失败：${e.message}`);
+            }
+          }}
+        >
+          <input
+            type="url"
+            className="kb-rag-input"
+            placeholder="网页地址，例如 https://example.com/docs"
+            value={webUrl}
+            onChange={(e) => setWebUrl(e.target.value)}
+          />
+          <button type="submit" className="kb-rag-search-btn">抓取网页</button>
+        </form>
+        <form
+          className="kb-ingest-row"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setError(null);
+            try {
+              const data = await ingestRepo(repoUrl.trim(), repoBranch.trim());
+              if (data.error) throw new Error(data.error);
+              setRepoUrl('');
+              await load();
+            } catch (e) {
+              setError(`仓库入库失败：${e.message}`);
+            }
+          }}
+        >
+          <input
+            type="url"
+            className="kb-rag-input"
+            placeholder="公开 Git 仓库 https 地址"
+            value={repoUrl}
+            onChange={(e) => setRepoUrl(e.target.value)}
+          />
+          <input
+            type="text"
+            className="kb-ingest-branch"
+            placeholder="分支，可空"
+            value={repoBranch}
+            onChange={(e) => setRepoBranch(e.target.value)}
+          />
+          <button type="submit" className="kb-rag-search-btn">导入仓库</button>
+        </form>
+        {jobs[0] && (jobs[0].status === 'pending' || jobs[0].status === 'running' || jobs[0].status === 'failed') && (
+          <div className="kb-ingest-job">
+            最近任务 {jobs[0].type}：{jobs[0].status === 'failed' ? jobs[0].error || '失败' : '解析中'}
+          </div>
+        )}
       </div>
 
       {/* RAG：向量化状态条 */}
@@ -191,7 +368,8 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
             <div className="kb-rag-progress-fill" style={{ width: `${embedRatio * 100}%` }} />
           </div>
           <span className="kb-rag-count">
-            {kbStats.embedded}/{kbStats.total} 条
+            子块 {kbStats.embedded}/{kbStats.total}
+            {kbStats.embeddingModel ? ` · ${kbStats.embeddingModel}` : ''}
           </span>
           {kbStats.pending > 0 && (
             <span className="kb-rag-pending">待向量化 {kbStats.pending} 条</span>
@@ -214,14 +392,18 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
             onClick={() => handleRegenerate('regenerate')}
             disabled={embeddingLoading || kbStats.total === 0}
           >
-            {embeddingLoading ? '处理中...' : '重新生成全部向量'}
+            {embeddingLoading
+              ? '处理中...'
+              : kbStats.modelStale
+                ? '按当前模型重新转化'
+                : '重新生成全部向量'}
           </button>
         </div>
       </div>
 
       {/* RAG：检索对比面板 */}
       <div className="kb-rag-panel">
-        <div className="kb-rag-title">🔍 检索对比（关键词 vs 语义）</div>
+        <div className="kb-rag-title">检索对比（关键词 / 语义 / 混合）</div>
         <div className="kb-rag-input-row">
           <input
             type="text"
@@ -261,44 +443,21 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
         {ragResults && (
           <div className="kb-rag-compare">
             <div className="kb-rag-col">
-              <div className="kb-rag-col-title">关键词检索（{ragResults.keyword.length} 条）</div>
+              <div className="kb-rag-col-title">关键词检索（{(ragResults.keyword || []).length} 条）</div>
               <div className="kb-rag-col-body">
-                {ragResults.keyword.length === 0 ? (
-                  <div className="kb-rag-empty">无匹配（字面不重叠就召回不到）</div>
-                ) : (
-                  ragResults.keyword.map((e) => (
-                    <div key={e.id} className="kb-rag-result">
-                      <div className="kb-rag-result-title">{e.title}</div>
-                      {e.category && <span className="kb-rag-result-cat">{e.category}</span>}
-                    </div>
-                  ))
-                )}
+                <RagHits hits={ragResults.keyword || []} empty="无匹配（字面不重叠就召回不到）" />
               </div>
             </div>
             <div className="kb-rag-col">
-              <div className="kb-rag-col-title">语义检索（{ragResults.semantic.length} 条）</div>
+              <div className="kb-rag-col-title">语义检索（{(ragResults.semantic || []).length} 条）</div>
               <div className="kb-rag-col-body">
-                {ragResults.semantic.length === 0 ? (
-                  <div className="kb-rag-empty">无匹配</div>
-                ) : (
-                  ragResults.semantic.map((e) => (
-                    <div key={e.id} className="kb-rag-result">
-                      <div className="kb-rag-result-title">{e.title}</div>
-                      {e.category && <span className="kb-rag-result-cat">{e.category}</span>}
-                      {typeof e.score === 'number' && e.score > 0 && (
-                        <div className="kb-rag-score">
-                          <div className="kb-rag-score-bar">
-                            <div
-                              className="kb-rag-score-fill"
-                              style={{ width: `${Math.min(e.score * 100, 100)}%` }}
-                            />
-                          </div>
-                          <span className="kb-rag-score-num">{e.score}</span>
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
+                <RagHits hits={ragResults.semantic || []} />
+              </div>
+            </div>
+            <div className="kb-rag-col">
+              <div className="kb-rag-col-title">混合检索（{(ragResults.hybrid || []).length} 条）</div>
+              <div className="kb-rag-col-body">
+                <RagHits hits={ragResults.hybrid || []} />
               </div>
             </div>
           </div>
@@ -331,6 +490,16 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
               <div className="kb-item-head">
                 <span className="kb-item-title">{e.title}</span>
                 {e.category && <span className="kb-item-cat">{e.category}</span>}
+                {e.ingestStatus && e.ingestStatus !== 'ready' && (
+                  <span className={`kb-ingest-status ${e.ingestStatus}`}>
+                    {e.ingestStatus === 'failed' ? `解析失败 ${e.ingestError || ''}` : '解析中'}
+                  </span>
+                )}
+                {(e.parentCount > 0 || e.childCount > 0) && (
+                  <span className="kb-item-chunks">
+                    {e.parentCount || 0} 父块 / {e.childCount || 0} 子块
+                  </span>
+                )}
               </div>
               {e.keywords?.length > 0 && (
                 <div className="kb-item-keywords">
@@ -339,7 +508,7 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
                   ))}
                 </div>
               )}
-              <div className="kb-item-content">{e.content}</div>
+              <EntryContent content={e.content} />
               <div className="kb-item-foot">
                 <span className="kb-item-time">
                   更新于 {new Date(e.updatedAt).toLocaleString('zh-CN')}

@@ -220,7 +220,7 @@ export async function getQuickQuestions() {
  */
 export async function sendAgentTask(
   { task, sessionId },
-  { onSession, onThinking, onTool, onChunk, onUsage, onDone, onError, signal }
+  { onSession, onThinking, onTool, onChunk, onCitations, onUsage, onDone, onError, signal }
 ) {
   let response
   try {
@@ -275,6 +275,9 @@ export async function sendAgentTask(
               break
             case 'tool':
               onTool?.(parsed)
+              break
+            case 'citations':
+              onCitations?.(parsed.citations)
               break
             case 'content':
               onChunk?.(parsed.content)
@@ -387,6 +390,42 @@ export async function getKbStats() {
  * @param {string} mode - keyword | semantic | compare（默认 compare）
  * @returns {Promise<{query, keyword: [], semantic: []}>}
  */
+export async function getIngestConfig() {
+  const res = await fetch(`${API_BASE}/knowledge/ingest/config`)
+  return res.json()
+}
+
+export async function getIngestJobs() {
+  const res = await fetch(`${API_BASE}/knowledge/jobs`)
+  return res.json()
+}
+
+export async function uploadKnowledgeBinary(file, category = '') {
+  const body = new FormData()
+  body.append('file', file)
+  if (category) body.append('category', category)
+  const res = await fetch(`${API_BASE}/knowledge/ingest/file`, { method: 'POST', body })
+  return res.json()
+}
+
+export async function ingestWebUrl(url) {
+  const res = await fetch(`${API_BASE}/knowledge/ingest/url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
+  return res.json()
+}
+
+export async function ingestRepo(url, branch = '') {
+  const res = await fetch(`${API_BASE}/knowledge/ingest/repo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, branch }),
+  })
+  return res.json()
+}
+
 export async function searchKnowledge(q, mode = 'compare') {
   const url = `${API_BASE}/knowledge/search?q=${encodeURIComponent(q)}&mode=${mode}`
   const res = await fetch(url)

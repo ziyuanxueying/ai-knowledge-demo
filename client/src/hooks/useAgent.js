@@ -67,6 +67,16 @@ export function useAgent() {
               return next
             })
           },
+          onCitations: citations => {
+            setMessages(prev => {
+              const next = [...prev]
+              const last = next[next.length - 1]
+              if (last && last.role === 'assistant') {
+                next[next.length - 1] = { ...last, citations }
+              }
+              return next
+            })
+          },
           onTool: ({ step, toolName, args, result }) => {
             setMessages(prev => {
               const next = [...prev]

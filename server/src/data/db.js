@@ -118,6 +118,7 @@ export async function initDB() {
   await pool.query(
     'CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages("sessionId", seq)'
   );
+  await pool.query('ALTER TABLE messages ADD COLUMN IF NOT EXISTS citations TEXT');
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kb_entries (
@@ -142,8 +143,85 @@ export async function initDB() {
     console.warn('[DB] HNSW 向量索引创建失败，语义检索将走顺序扫描：', err.message);
   }
   await pool.query('CREATE INDEX IF NOT EXISTS idx_kb_entries_updated ON kb_entries("updatedAt" DESC)');
+  await pool.query(`ALTER TABLE kb_entries ADD COLUMN IF NOT EXISTS "sourceType" TEXT NOT NULL DEFAULT 'manual'`);
+  await pool.query(`ALTER TABLE kb_entries ADD COLUMN IF NOT EXISTS "sourceUrl" TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE kb_entries ADD COLUMN IF NOT EXISTS "cosKey" TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE kb_entries ADD COLUMN IF NOT EXISTS "ingestStatus" TEXT NOT NULL DEFAULT 'ready'`);
+  await pool.query(`ALTER TABLE kb_entries ADD COLUMN IF NOT EXISTS "ingestError" TEXT NOT NULL DEFAULT ''`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS kb_jobs (
+      id          TEXT PRIMARY KEY,
+      type        TEXT NOT NULL,
+      status      TEXT NOT NULL,
+      payload     TEXT NOT NULL,
+      "entryId"   TEXT,
+      error       TEXT NOT NULL DEFAULT '',
+      "createdAt" TEXT NOT NULL,
+      "updatedAt" TEXT NOT NULL
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_kb_jobs_status ON kb_jobs(status, "createdAt")');
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS kb_chunks (
+      id              TEXT PRIMARY KEY,
+      "entryId"       TEXT NOT NULL REFERENCES kb_entries(id) ON DELETE CASCADE,
+      "parentId"      TEXT,
+      "chunkIndex"    INTEGER NOT NULL,
+      heading         TEXT NOT NULL DEFAULT '',
+      content         TEXT NOT NULL DEFAULT '',
+      "charStart"     INTEGER NOT NULL DEFAULT 0,
+      "charEnd"       INTEGER NOT NULL DEFAULT 0,
+      embedding       vector(${VECTOR_DIM}),
+      embedding_model TEXT,
+      "createdAt"     TEXT NOT NULL
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_kb_chunks_entry ON kb_chunks("entryId")');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_kb_chunks_parent ON kb_chunks("parentId")');
+  await ensureChunkEmbeddingDim();
 
   await migrateFromJSON();
+}
+
+/**
+ * pgvector 的 vector(N) 不能原地改维度。和 EMBEDDING_DIM 不一致时丢掉子块向量列再重建。
+ */
+async function ensureChunkEmbeddingDim() {
+  const res = await pool.query(`
+    SELECT format_type(a.atttypid, a.atttypmod) AS label
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'kb_chunks'
+      AND a.attname = 'embedding'
+      AND NOT a.attisdropped
+  `);
+  const label = res.rows[0]?.label || '';
+  const match = /vector\((\d+)\)/.exec(label);
+  const dim = match ? Number(match[1]) : null;
+  if (dim == null || dim === VECTOR_DIM) {
+    await createChunkHnsw();
+    return;
+  }
+  console.warn(`[DB] kb_chunks.embedding 当前是 ${label || '未知'}，将重建为 vector(${VECTOR_DIM})`);
+  await pool.query('DROP INDEX IF EXISTS idx_kb_chunks_embedding');
+  await pool.query('ALTER TABLE kb_chunks DROP COLUMN IF EXISTS embedding');
+  await pool.query(`ALTER TABLE kb_chunks ADD COLUMN embedding vector(${VECTOR_DIM})`);
+  await createChunkHnsw();
+}
+
+async function createChunkHnsw() {
+  try {
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_kb_chunks_embedding
+      ON kb_chunks USING hnsw (embedding vector_cosine_ops)
+    `);
+  } catch (err) {
+    console.warn('[DB] 子块 HNSW 索引创建失败，语义检索将走顺序扫描：', err.message);
+  }
 }
 
 /** 从旧的 JSON 文件迁移数据到 Postgres（幂等） */

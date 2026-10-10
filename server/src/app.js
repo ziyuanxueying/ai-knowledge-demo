@@ -12,7 +12,8 @@ import promptsRouter from './routes/prompts.js'
 import compareRouter from './routes/compare.js'
 import { config } from './config/index.js'
 import { initDB, pingDB, closeDB } from './data/db.js'
-import { seedIfEmpty } from './data/kbStore.js'
+import { seedIfEmpty, syncChunks } from './data/kbStore.js'
+import { kickIngest } from './rag/ingest.js'
 
 // 当前文件所在目录（server/src/），用于定位前端构建产物
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -128,6 +129,8 @@ async function bootstrap() {
   try {
     await initDB()
     await seedIfEmpty()
+    await syncChunks()
+    kickIngest()
   } catch (err) {
     console.error('❌ 数据库初始化失败，请检查 PostgreSQL 连接与 pgvector 扩展：', err.message)
     process.exit(1)

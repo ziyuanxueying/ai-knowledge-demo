@@ -16,6 +16,7 @@ function mapMessage(m) {
     ...m,
     usage: m.usage ? JSON.parse(m.usage) : undefined,
     toolSteps: m.toolSteps ? JSON.parse(m.toolSteps) : undefined,
+    citations: m.citations ? JSON.parse(m.citations) : undefined,
   };
 }
 
@@ -103,7 +104,7 @@ export async function getSession(sessionId) {
 /**
  * 追加消息到会话
  * @param {string} sessionId
- * @param {object} message - {role, content, usage?, toolSteps?}
+ * @param {object} message - {role, content, usage?, toolSteps?, citations?}
  * @returns {Promise<object|null>} 更新后的 session
  */
 export async function appendMessage(sessionId, message) {
@@ -114,8 +115,8 @@ export async function appendMessage(sessionId, message) {
     if (!session) return null;
 
     await client.query(
-      `INSERT INTO messages (id, "sessionId", role, content, usage, "toolSteps", "createdAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO messages (id, "sessionId", role, content, usage, "toolSteps", citations, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         sessionId,
@@ -123,6 +124,7 @@ export async function appendMessage(sessionId, message) {
         message.content || '',
         message.usage ? JSON.stringify(message.usage) : null,
         message.toolSteps ? JSON.stringify(message.toolSteps) : null,
+        message.citations ? JSON.stringify(message.citations) : null,
         now,
       ]
     );

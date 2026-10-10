@@ -1,7 +1,8 @@
 import OpenAI from 'openai'
 import { config } from '../config/index.js'
 import { AGENT_TOOLS, executeTool } from './tools.js'
-import { searchEntriesSemantic, formatSearchResultText } from '../data/kbStore.js'
+import { retrieveHybrid } from '../rag/retrieve.js'
+import { lastKbCitations } from './tools.js'
 
 /**
  * Agent 服务
@@ -44,8 +45,8 @@ const AGENT_SYSTEM_PROMPT = `你是前端开发知识库助手"小码"，具备�
   1. 前端概念、原理、最佳实践类问题（如闭包、虚拟 DOM、事件循环、useEffect 等）
   2. 任何关于"知识库 / 本项目 / 检索配置 / 工具"本身的问题（模型不可能凭训练数据知道这些，必须查）
 - **绝不在未调用 search_frontend_kb 的情况下，凭记忆回答上述问题，更不能编造"据知识库"的措辞**
-- 调用后：若知识库命中，以知识库内容为准回答，标注"据知识库"
-- 若知识库明确返回"未找到"，才可用自身通用知识补充，并标注"知识库未收录，以下为通用知识"
+- 调用后：若知识库命中，以知识库内容为准回答，并用来源编号 [1]、[2] 标注，编号必须和检索结果一致
+- 若知识库明确返回"未找到"，才可用自身通用知识补充，并写明"知识库未收录"。不要在没有对应编号时说内容来自知识库
 - 遇到需要查证的事实（如包大小、版本），调用 get_npm_package_info 获取真实数据，不要凭记忆编造
 - 可以连续调用多个工具，分步完成任务
 - 拿到工具结果后，综合分析再给出最终回答
@@ -53,7 +54,7 @@ const AGENT_SYSTEM_PROMPT = `你是前端开发知识库助手"小码"，具备�
 
 ## 回答规范
 - 最终答案用 Markdown，代码用代码块
-- 引用工具返回的数据时标注来源（如"据知识库"/"据 npm registry"）
+- 引用知识库时使用检索结果里的 [编号]；引用 npm 时标注"据 npm registry"
 - 语气专业友好，称呼对方为"你"
 
 当前时间：${new Date().toLocaleString('zh-CN')}
@@ -84,10 +85,10 @@ export async function* runAgent({ task, history = [], signal }) {
   let ragContext = ''
   if (shouldForceKbRetrieve(task)) {
     try {
-      const results = await searchEntriesSemantic(task, 3, 0.3)
-      if (results.length > 0) {
-        ragContext = formatSearchResultText(task, results)
-        // 推送一个"检索"步骤给前端展示（与工具调用同款 UI）
+      const found = await retrieveHybrid(task, { history, topK: 5, threshold: 0.3 })
+      if (found.hits.length > 0) {
+        ragContext = found.text
+        yield { type: 'citations', citations: found.citations }
         yield { type: 'thinking', step: 1, plan: [{ toolName: 'search_frontend_kb', args: { keyword: task } }] }
         yield { type: 'tool', step: 1, toolName: 'search_frontend_kb', args: { keyword: task }, result: ragContext }
       }
@@ -98,7 +99,7 @@ export async function* runAgent({ task, history = [], signal }) {
 
   // 组装初始 messages：system + RAG 上下文 + 历史 + 当前任务
   const systemContent = ragContext
-    ? `${AGENT_SYSTEM_PROMPT}\n\n## 已检索到的知识库内容（请据此回答，标注"据知识库"）\n${ragContext}`
+    ? `${AGENT_SYSTEM_PROMPT}\n\n## 已检索到的知识库内容（请据此回答，用来源编号 [n] 标注）\n${ragContext}`
     : AGENT_SYSTEM_PROMPT
   const messages = [
     { role: 'system', content: systemContent },
@@ -167,6 +168,9 @@ export async function* runAgent({ task, history = [], signal }) {
         const args = safeParseArgs(toolCall.function.arguments)
 
         const result = await executeTool(toolName, args)
+        if (toolName === 'search_frontend_kb' && lastKbCitations.length > 0) {
+          yield { type: 'citations', citations: lastKbCitations.map((item) => ({ ...item })) }
+        }
 
         yield {
           type: 'tool',

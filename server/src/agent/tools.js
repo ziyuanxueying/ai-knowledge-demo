@@ -10,22 +10,23 @@
  * 工具定义（tools）用 JSON Schema 描述参数，模型据此生成可解析的参数。
  *
  * 【知识库接入 - RAG 升级】：
- * search_frontend_kb 工具现在调用"语义检索"（searchEntriesSemantic）：
- *   把查询向量化，与每条知识条目的向量算余弦相似度，取 Top-K。
- *   即使查询和条目字面不重叠（如"函数怎么记住外部变量" vs "闭包"）也能召回。
- * 当未配置 embedding API Key 或向量缺失时，自动回退关键词检索，保证可用。
+ * search_frontend_kb 对子块做关键词 + 向量混合检索，再把父块正文交回模型。
+ * 未配置 embedding 或向量缺失时，向量路为空，只剩关键词路。
  */
 
-import { searchEntriesSemantic, formatSearchResultText } from '../data/kbStore.js'
+/** 最近一次知识库检索的引用，供 Agent 在工具调用后推给前端 */
+export let lastKbCitations = []
+
+import { retrieveHybrid } from '../rag/retrieve.js'
 
 /**
  * 工具 1：搜索前端知识库（语义检索 / RAG）
  */
 async function searchFrontendKb(keyword) {
   if (!keyword) return '错误：keyword 不能为空'
-  // 语义检索：取相似度最高的 Top 3，相似度下限 0.3 过滤无关结果
-  const results = await searchEntriesSemantic(keyword, 3, 0.3)
-  return formatSearchResultText(keyword, results)
+  const found = await retrieveHybrid(keyword, { topK: 5, threshold: 0.3, rewrite: false })
+  lastKbCitations = found.citations
+  return found.text
 }
 
 /**

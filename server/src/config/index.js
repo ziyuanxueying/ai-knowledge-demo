@@ -43,6 +43,8 @@ export const config = {
     // Embedding 向量化模型（RAG 用）：通义千问 text-embedding-v3 输出 1024 维向量
     // 通过同一个 OpenAI 兼容端点 /embeddings 调用
     embeddingModel: process.env.EMBEDDING_MODEL || 'text-embedding-v3',
+    // 可选二排模型。留空则混合检索做到 RRF 为止。例如 gte-rerank
+    rerankModel: process.env.RERANK_MODEL || '',
   },
 
   // 文件存储目录（prompts.json）
@@ -54,6 +56,15 @@ export const config = {
   // Embedding 向量维度（需与 embeddingModel 输出一致）
   // text-embedding-v3 默认 1024 维
   embeddingDim: Number.parseInt(process.env.EMBEDDING_DIM || '1024', 10),
+
+  // 腾讯云 COS：原文（PDF / Word / 网页快照 / 仓库文件）放这里，正文仍在 Postgres
+  cos: {
+    secretId: process.env.COS_SECRET_ID || '',
+    secretKey: process.env.COS_SECRET_KEY || '',
+    bucket: process.env.COS_BUCKET || '',
+    region: process.env.COS_REGION || '',
+    prefix: process.env.COS_PREFIX || 'kb/',
+  },
 };
 
 /**

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -13,9 +14,35 @@ import AgentSteps from './AgentSteps.jsx';
  * - remark-gfm：支持 GitHub 风格 Markdown（表格、删除线等）
  * - rehype-highlight：代码块语法高亮
  */
+function linkCitations(content) {
+  return String(content || '')
+    .split(/(```[\s\S]*?```)/g)
+    .map((part, index) => {
+      if (index % 2 === 1) return part;
+      return part.replace(/\[(\d+)\]/g, '[$1](#cite-$1)');
+    })
+    .join('');
+}
+
+function HighlightedExcerpt({ text, start, end }) {
+  if (text == null) return null;
+  const from = Number(start) || 0;
+  const to = Number(end) || 0;
+  if (to <= from || to > text.length) return text;
+  return (
+    <>
+      {text.slice(0, from)}
+      <mark className="cite-hit">{text.slice(from, to)}</mark>
+      {text.slice(to)}
+    </>
+  );
+}
+
 export default function Message({ message, mode = 'chat' }) {
+  const [openCite, setOpenCite] = useState(null);
   const isUser = message.role === 'user';
   const hasSteps = !isUser && message.steps && message.steps.length > 0;
+  const citations = !isUser && Array.isArray(message.citations) ? message.citations : [];
   // Agent 模式下，即使没调用工具也显示一个标记，让用户清楚这是 Agent 的"直答"
   const showAgentDirectBadge = mode === 'agent' && !isUser && !hasSteps;
 
@@ -40,8 +67,28 @@ export default function Message({ message, mode = 'chat' }) {
                 </div>
               )}
               {message.content ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {message.content}
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeHighlight]}
+                  components={{
+                    a: ({ href, children }) => {
+                      if (href && href.startsWith('#cite-')) {
+                        const n = Number(href.slice(6));
+                        return (
+                          <button type="button" className="cite-mark" onClick={() => setOpenCite(n)}>
+                            {children}
+                          </button>
+                        );
+                      }
+                      return (
+                        <a href={href} target="_blank" rel="noreferrer">
+                          {children}
+                        </a>
+                      );
+                    },
+                  }}
+                >
+                  {linkCitations(message.content)}
                 </ReactMarkdown>
               ) : !hasSteps ? (
                 <span style={{ color: 'rgba(0,0,0,0.4)' }}>思考中...</span>
@@ -52,6 +99,30 @@ export default function Message({ message, mode = 'chat' }) {
           )}
         </div>
         {/* 显示 Token 用量（仅 AI 消息且非流式时） */}
+        {citations.length > 0 && (
+          <div className="cite-list">
+            {citations.map((cite) => {
+              const open = openCite === cite.n;
+              const label = cite.heading ? `${cite.title} / ${cite.heading}` : cite.title;
+              return (
+                <div key={`${cite.n}-${cite.parentId}`} className="cite-card">
+                  <button type="button" className="cite-card-btn" onClick={() => setOpenCite(open ? null : cite.n)}>
+                    [{cite.n}] {label}
+                  </button>
+                  {open && (
+                    <div className="cite-excerpt">
+                      <HighlightedExcerpt
+                        text={cite.excerpt}
+                        start={cite.highlightStart}
+                        end={cite.highlightEnd}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
         {!isUser && !message.streaming && message.usage && (
           <div className="message-usage">
             输入 {message.usage.prompt_tokens} tokens · 输出 {message.usage.completion_tokens} tokens · 共 {message.usage.total_tokens} tokens
