@@ -242,6 +242,25 @@ function toCitation(hit) {
   };
 }
 
+/** 给前端步骤卡片用：默认展示命中子块摘要，父块全文留到展开。 */
+export function toDisplayHits(hits) {
+  return (hits || []).map((hit) => {
+    const parent = String(hit.excerpt || '');
+    const child = String(hit.childExcerpt || '').replace(/\s+/g, ' ').trim();
+    const previewSource = child || parent.replace(/\s+/g, ' ').trim();
+    const preview = previewSource.length > 96 ? `${previewSource.slice(0, 96)}…` : previewSource;
+    return {
+      n: hit.n,
+      title: hit.title,
+      heading: hit.heading || '',
+      preview,
+      excerpt: parent,
+      highlightStart: hit.highlightStart,
+      highlightEnd: hit.highlightEnd,
+    };
+  });
+}
+
 function freshness(updatedAt) {
   const time = new Date(updatedAt).getTime();
   if (!Number.isFinite(time)) return 1;

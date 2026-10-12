@@ -653,6 +653,47 @@ body {
   cursor: not-allowed;
 }
 
+.kb-reader {
+  position: relative;
+  z-index: 1;
+  width: min(760px, 92vw);
+  height: min(80vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.kb-reader-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.kb-reader-title {
+  font-size: 16px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-reader-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 18px 24px;
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
 /* ===== RAG：向量化状态条 ===== */
 .kb-rag-bar {
   display: flex;
@@ -1237,9 +1278,170 @@ body {
   padding: 8px 10px;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.03);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cite-excerpt-body {
+  white-space: pre-wrap;
+}
+
+.agent-steps {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-steps-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.agent-step + .agent-step {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.agent-step-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.agent-step-num {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.agent-step-plan {
+  color: var(--text-primary);
+}
+
+.agent-tool {
+  margin-top: 6px;
+}
+
+.agent-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-tool-name {
+  font-weight: 600;
+}
+
+.agent-tool-args {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.agent-tool-args summary {
+  cursor: pointer;
+}
+
+.message-content .agent-tool-args pre,
+.message-content .agent-tool-result-text {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.agent-tool-result-text {
+  max-height: 4.5em;
+}
+
+.agent-tool-result-text.is-open {
+  max-height: 16em;
+}
+
+.agent-kb-note {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.agent-kb-hit + .agent-kb-hit {
+  margin-top: 4px;
+}
+
+.agent-kb-hit-btn {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'title action'
+    'preview preview';
+  gap: 0 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-kb-hit-btn.is-static {
+  cursor: default;
+}
+
+.agent-kb-hit-btn.is-static .agent-kb-hit-preview {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.agent-kb-hit-title {
+  grid-area: title;
+  font-weight: 600;
+}
+
+.agent-kb-hit-preview {
+  grid-area: preview;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+}
+
+.agent-kb-hit-action {
+  grid-area: action;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.agent-kb-parent {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff;
   white-space: pre-wrap;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.agent-direct-badge {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .cite-hit {

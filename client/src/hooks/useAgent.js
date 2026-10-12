@@ -77,13 +77,15 @@ export function useAgent() {
               return next
             })
           },
-          onTool: ({ step, toolName, args, result }) => {
+          onTool: ({ step, toolName, args, result, hits }) => {
             setMessages(prev => {
               const next = [...prev]
               const last = next[next.length - 1]
               if (last && last.role === 'assistant') {
                 const steps = (last.steps || []).map(s =>
-                  s.step === step ? { ...s, tools: [...s.tools, { toolName, args, result }] } : s
+                  s.step === step
+                    ? { ...s, tools: [...s.tools, { toolName, args, result, hits }] }
+                    : s
                 )
                 next[next.length - 1] = { ...last, steps }
               }

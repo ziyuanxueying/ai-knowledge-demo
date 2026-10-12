@@ -16,16 +16,21 @@
 
 /** 最近一次知识库检索的引用，供 Agent 在工具调用后推给前端 */
 export let lastKbCitations = []
+/** 同一轮检索的展示用命中（子块摘要 + 父块全文） */
+export let lastKbHits = []
 
-import { retrieveHybrid } from '../rag/retrieve.js'
+import { retrieveHybrid, toDisplayHits } from '../rag/retrieve.js'
 
 /**
  * 工具 1：搜索前端知识库（语义检索 / RAG）
  */
 async function searchFrontendKb(keyword) {
+  lastKbCitations = []
+  lastKbHits = []
   if (!keyword) return '错误：keyword 不能为空'
   const found = await retrieveHybrid(keyword, { topK: 5, threshold: 0.3, rewrite: false })
   lastKbCitations = found.citations
+  lastKbHits = toDisplayHits(found.hits)
   return found.text
 }
 

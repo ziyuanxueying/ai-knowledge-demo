@@ -20,12 +20,25 @@ export function assertCosConfig() {
   }
 }
 
+let loggedEndpoint = false;
+
 function client() {
   assertCosConfig();
-  return new COS({
+  const options = {
     SecretId: config.cos.secretId,
     SecretKey: config.cos.secretKey,
-  });
+  };
+  if (config.cos.internal) {
+    options.Domain = '{Bucket}.cos-internal.{Region}.tencentcos.cn';
+  }
+  if (!loggedEndpoint) {
+    loggedEndpoint = true;
+    const host = config.cos.internal
+      ? `${config.cos.bucket}.cos-internal.${config.cos.region}.tencentcos.cn`
+      : `${config.cos.bucket}.cos.${config.cos.region}.myqcloud.com`;
+    console.log(`[COS] ${config.cos.internal ? '内网' : '公网'} ${host}`);
+  }
+  return new COS(options);
 }
 
 export function buildObjectKey(entryId, filename) {

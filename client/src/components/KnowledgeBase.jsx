@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import {
   getKnowledgeEntries,
+  getKnowledgeEntry,
   createKnowledgeEntry,
   updateKnowledgeEntry,
   deleteKnowledgeEntry,
@@ -15,34 +16,72 @@ import {
 } from '../utils/api.js';
 import MenuButton from './MenuButton.jsx';
 
-/** 长文档正文固定约 6 行，超出后可展开全文再收起。 */
-function EntryContent({ content }) {
+function formatChars(count) {
+  const n = Number(count) || 0;
+  if (n >= 10000) return `${(n / 10000).toFixed(n >= 100000 ? 0 : 1)} 万字`;
+  return `${n} 字`;
+}
+
+/** 列表只放预览。短文可在卡片里展开；长文打开阅读层，收起按钮固定在顶部。 */
+function EntryContent({ preview, truncated, onOpen }) {
   const ref = useRef(null);
   const [open, setOpen] = useState(false);
   const [overflows, setOverflows] = useState(false);
+  const text = preview || '';
 
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || open) return;
+    if (!el || open || truncated) return;
     setOverflows(el.scrollHeight > el.clientHeight + 1);
-  }, [content, open]);
+  }, [text, open, truncated]);
 
-  if (!content) return null;
+  if (!text && !truncated) return null;
 
   return (
     <>
       <div
         ref={ref}
-        className={`kb-item-content${open ? ' is-open' : ''}${overflows && !open ? ' is-clamped' : ''}`}
+        className={`kb-item-content${open && !truncated ? ' is-open' : ''}${(truncated || (overflows && !open)) ? ' is-clamped' : ''}`}
       >
-        {content}
+        {text}
       </div>
-      {overflows && (
-        <button type="button" className="kb-content-toggle" onClick={() => setOpen((value) => !value)}>
-          {open ? '收起' : '展开全文'}
+      {truncated ? (
+        <button type="button" className="kb-content-toggle" onClick={onOpen}>
+          查看全文
         </button>
-      )}
+      ) : overflows ? (
+        <button type="button" className="kb-content-toggle" onClick={() => setOpen((value) => !value)}>
+          {open ? '收起' : '展开'}
+        </button>
+      ) : null}
     </>
+  );
+}
+
+function Reader({ title, content, loading, onClose }) {
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="kb-modal-mask">
+      <button type="button" className="kb-modal-backdrop" aria-label="收起全文" onClick={onClose} />
+      <div className="kb-reader" role="dialog" aria-modal="true" aria-label={title || '全文'}>
+        <div className="kb-reader-bar">
+          <span className="kb-reader-title">{title}</span>
+          <button type="button" className="kb-modal-btn" onClick={onClose}>
+            收起
+          </button>
+        </div>
+        <div className="kb-reader-body">
+          {loading ? '加载全文…' : content}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -102,6 +141,9 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
   const [repoBranch, setRepoBranch] = useState('');
   const [ingestConfig, setIngestConfig] = useState({ cosConfigured: true, missing: [] });
   const [jobs, setJobs] = useState([]);
+  const [reader, setReader] = useState(null);
+  const searchRef = useRef('');
+  searchRef.current = search;
 
   const refreshStats = useCallback(async () => {
     try {
@@ -112,16 +154,21 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
     }
   }, []);
 
+  const reloadEntries = useCallback(async (q = searchRef.current) => {
+    const { entries: next } = await getKnowledgeEntries(String(q || '').trim());
+    setEntries(next || []);
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [{ entries }, config, jobData] = await Promise.all([
-        getKnowledgeEntries(),
+      const [{ entries: next }, config, jobData] = await Promise.all([
+        getKnowledgeEntries(searchRef.current.trim()),
         getIngestConfig(),
         getIngestJobs(),
       ]);
-      setEntries(entries || []);
+      setEntries(next || []);
       setIngestConfig(config || { cosConfigured: false, missing: [] });
       setJobs(jobData?.jobs || []);
       await refreshStats();
@@ -136,13 +183,30 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
     load();
   }, [load]);
 
+  const prevQuery = useRef('');
+  useEffect(() => {
+    const q = search.trim();
+    if (!q && !prevQuery.current) return undefined;
+    prevQuery.current = q;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      reloadEntries(q).catch((e) => {
+        if (!cancelled) setError(`搜索失败：${e.message}`);
+      });
+    }, q ? 300 : 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [search, reloadEntries]);
+
   const busy = entries.some((entry) => entry.ingestStatus === 'pending' || entry.ingestStatus === 'parsing')
     || jobs.some((job) => job.status === 'pending' || job.status === 'running');
 
   useEffect(() => {
     if (!busy) return undefined;
     const timer = setInterval(() => {
-      Promise.all([getKnowledgeEntries(), getIngestJobs()])
+      Promise.all([getKnowledgeEntries(searchRef.current.trim()), getIngestJobs()])
         .then(([entryData, jobData]) => {
           setEntries(entryData.entries || []);
           setJobs(jobData.jobs || []);
@@ -152,17 +216,7 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
     return () => clearInterval(timer);
   }, [busy]);
 
-  const filtered = search
-    ? entries.filter((e) => {
-        const q = search.toLowerCase();
-        return (
-          e.title.toLowerCase().includes(q) ||
-          e.content.toLowerCase().includes(q) ||
-          e.keywords.some((k) => k.toLowerCase().includes(q)) ||
-          (e.category || '').toLowerCase().includes(q)
-        );
-      })
-    : entries;
+  const filtered = entries;
 
   const handleSave = async () => {
     if (!editing.title?.trim()) {
@@ -211,13 +265,33 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
     setEditing({ title: '', keywordsText: '', category: '', content: '' });
   };
 
-  const startEdit = (entry) => {
+  const startEdit = async (entry) => {
     setError(null);
-    setEditing({
-      ...entry,
-      keywordsText: (entry.keywords || []).join(', '),
-    });
+    try {
+      const needsFull = !entry.content || (entry.contentLength && entry.content.length < entry.contentLength);
+      const full = needsFull ? (await getKnowledgeEntry(entry.id)).entry : entry;
+      setEditing({
+        ...entry,
+        ...full,
+        keywordsText: (full.keywords || []).join(', '),
+      });
+    } catch (e) {
+      setError(`打开编辑失败：${e.message}`);
+    }
   };
+
+  const openReader = async (entry) => {
+    setReader({ id: entry.id, title: entry.title, content: '', loading: true });
+    try {
+      const { entry: full } = await getKnowledgeEntry(entry.id);
+      setReader({ id: full.id, title: full.title, content: full.content || '', loading: false });
+    } catch (e) {
+      setReader(null);
+      setError(`打开全文失败：${e.message}`);
+    }
+  };
+
+  const closeReader = useCallback(() => setReader(null), []);
 
   // RAG：检索对比
   const handleRagSearch = async () => {
@@ -500,6 +574,9 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
                     {e.parentCount || 0} 父块 / {e.childCount || 0} 子块
                   </span>
                 )}
+                {e.contentLength > 0 && (
+                  <span className="kb-item-chunks">{formatChars(e.contentLength)}</span>
+                )}
               </div>
               {e.keywords?.length > 0 && (
                 <div className="kb-item-keywords">
@@ -508,7 +585,11 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
                   ))}
                 </div>
               )}
-              <EntryContent content={e.content} />
+              <EntryContent
+                preview={e.preview || ''}
+                truncated={(e.contentLength || 0) > (e.preview || '').length}
+                onOpen={() => openReader(e)}
+              />
               <div className="kb-item-foot">
                 <span className="kb-item-time">
                   更新于 {new Date(e.updatedAt).toLocaleString('zh-CN')}
@@ -530,6 +611,15 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
           ))
         )}
       </div>
+
+      {reader && (
+        <Reader
+          title={reader.title}
+          content={reader.content}
+          loading={reader.loading}
+          onClose={closeReader}
+        />
+      )}
 
       {/* 编辑/新增 弹层：backdrop 用 button（无障碍），modal 用 role=dialog */}
       {editing && (

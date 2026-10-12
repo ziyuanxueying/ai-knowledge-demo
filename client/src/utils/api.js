@@ -339,10 +339,23 @@ export async function deleteSession(sessionId) {
 
 /* ========== 知识库管理 API ========== */
 
-/** 获取知识库全部条目 */
-export async function getKnowledgeEntries() {
-  const res = await fetch(`${API_BASE}/knowledge`)
-  return res.json()
+/** 获取知识库条目列表。q 在服务端匹配标题、关键词、分类和正文，响应里只有正文预览。 */
+export async function getKnowledgeEntries(q = '') {
+  const query = String(q || '').trim()
+  const url = query ? `${API_BASE}/knowledge?q=${encodeURIComponent(query)}` : `${API_BASE}/knowledge`
+  const res = await fetch(url)
+  const text = await res.text()
+  const data = text ? JSON.parse(text) : {}
+  if (!res.ok) throw new Error(data.error || '加载知识库失败')
+  return data
+}
+
+/** 获取单条知识的全文 */
+export async function getKnowledgeEntry(id) {
+  const res = await fetch(`${API_BASE}/knowledge/${encodeURIComponent(id)}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || '加载条目失败')
+  return data
 }
 
 /** 创建知识库条目 */

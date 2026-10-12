@@ -38,10 +38,47 @@ function HighlightedExcerpt({ text, start, end }) {
   );
 }
 
+function citeWindow(text, start, end) {
+  const from = Math.max(0, start - 36);
+  const to = Math.min(text.length, Math.max(end + 36, from + 220));
+  const lead = from > 0 ? '…' : '';
+  const pad = lead.length;
+  return {
+    text: `${lead}${text.slice(from, to)}${to < text.length ? '…' : ''}`,
+    start: start - from + pad,
+    end: end - from + pad,
+  };
+}
+
+function CiteExcerpt({ text, start, end }) {
+  const [full, setFull] = useState(false);
+  const source = text || '';
+  const long = source.length > 280;
+  const view = long && !full ? citeWindow(source, Number(start) || 0, Number(end) || 0) : null;
+
+  return (
+    <div className="cite-excerpt">
+      <div className="cite-excerpt-body is-open">
+        <HighlightedExcerpt
+          text={view ? view.text : source}
+          start={view ? view.start : start}
+          end={view ? view.end : end}
+        />
+      </div>
+      {long && (
+        <button type="button" className="kb-content-toggle" onClick={() => setFull((value) => !value)}>
+          {full ? '收起' : '展开父块'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function Message({ message, mode = 'chat' }) {
   const [openCite, setOpenCite] = useState(null);
   const isUser = message.role === 'user';
-  const hasSteps = !isUser && message.steps && message.steps.length > 0;
+  const steps = message.steps?.length ? message.steps : message.toolSteps;
+  const hasSteps = !isUser && steps && steps.length > 0;
   const citations = !isUser && Array.isArray(message.citations) ? message.citations : [];
   // Agent 模式下，即使没调用工具也显示一个标记，让用户清楚这是 Agent 的"直答"
   const showAgentDirectBadge = mode === 'agent' && !isUser && !hasSteps;
@@ -60,7 +97,7 @@ export default function Message({ message, mode = 'chat' }) {
           ) : (
             <>
               {/* Agent 模式：先展示工具调用步骤，再展示最终答案 */}
-              {hasSteps && <AgentSteps steps={message.steps} />}
+              {hasSteps && <AgentSteps steps={steps} />}
               {showAgentDirectBadge && (
                 <div className="agent-direct-badge">
                   🤖 Agent 判断无需调用工具，直接回答
@@ -110,13 +147,11 @@ export default function Message({ message, mode = 'chat' }) {
                     [{cite.n}] {label}
                   </button>
                   {open && (
-                    <div className="cite-excerpt">
-                      <HighlightedExcerpt
-                        text={cite.excerpt}
-                        start={cite.highlightStart}
-                        end={cite.highlightEnd}
-                      />
-                    </div>
+                    <CiteExcerpt
+                      text={cite.excerpt}
+                      start={cite.highlightStart}
+                      end={cite.highlightEnd}
+                    />
                   )}
                 </div>
               );

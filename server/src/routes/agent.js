@@ -34,6 +34,8 @@ const router = Router();
  * }
  */
 router.post('/', async (req, res) => {
+  // 声明在 try 外，出错分支才能标记已结束。写在 try 里时 catch 访问不到，会把进程打崩。
+  let finished = false;
   try {
     const { task, sessionId } = req.body;
 
@@ -65,7 +67,6 @@ router.post('/', async (req, res) => {
       .slice(-10); // 只保留最近 10 条，控制 token
 
     const controller = new AbortController();
-    let finished = false;
     // 注意：不能用 req.on('close')，它会在请求体读完后立即触发，导致提前中断。
     // 用 res.on('close') 并加 finished 守卫，仅响应客户端真实断开（如点"停止"）。
     res.on('close', () => {
@@ -92,6 +93,7 @@ router.post('/', async (req, res) => {
                 toolName: event.toolName,
                 args: event.args,
                 result: event.result,
+                hits: event.hits,
               });
             }
             res.write(`data: ${JSON.stringify(event)}\n\n`);

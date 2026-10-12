@@ -1,8 +1,8 @@
 import OpenAI from 'openai'
 import { config } from '../config/index.js'
 import { AGENT_TOOLS, executeTool } from './tools.js'
-import { retrieveHybrid } from '../rag/retrieve.js'
-import { lastKbCitations } from './tools.js'
+import { retrieveHybrid, toDisplayHits } from '../rag/retrieve.js'
+import { lastKbCitations, lastKbHits } from './tools.js'
 
 /**
  * Agent 服务
@@ -90,7 +90,14 @@ export async function* runAgent({ task, history = [], signal }) {
         ragContext = found.text
         yield { type: 'citations', citations: found.citations }
         yield { type: 'thinking', step: 1, plan: [{ toolName: 'search_frontend_kb', args: { keyword: task } }] }
-        yield { type: 'tool', step: 1, toolName: 'search_frontend_kb', args: { keyword: task }, result: ragContext }
+        yield {
+          type: 'tool',
+          step: 1,
+          toolName: 'search_frontend_kb',
+          args: { keyword: task },
+          result: ragContext,
+          hits: toDisplayHits(found.hits),
+        }
       }
     } catch {
       // 预检索失败（如未配 API Key）不阻断，退化为无 RAG 上下文
@@ -168,8 +175,12 @@ export async function* runAgent({ task, history = [], signal }) {
         const args = safeParseArgs(toolCall.function.arguments)
 
         const result = await executeTool(toolName, args)
-        if (toolName === 'search_frontend_kb' && lastKbCitations.length > 0) {
-          yield { type: 'citations', citations: lastKbCitations.map((item) => ({ ...item })) }
+        let hits
+        if (toolName === 'search_frontend_kb') {
+          if (lastKbCitations.length > 0) {
+            yield { type: 'citations', citations: lastKbCitations.map((item) => ({ ...item })) }
+          }
+          hits = lastKbHits.map((item) => ({ ...item }))
         }
 
         yield {
@@ -178,6 +189,7 @@ export async function* runAgent({ task, history = [], signal }) {
           toolName,
           args,
           result,
+          hits,
         }
 
         // 把工具结果作为 tool 角色消息回传给模型

@@ -8,7 +8,7 @@
 
 PDF、Word（`.docx`）、PPT（`.pptx`）、HTML、Markdown、TXT、CSV 走异步入库：接口先返回，后台再解析。原文存腾讯云 COS，对象键记在 `kb_entries.cosKey`。解析出的正文仍进 `content`，然后按下面的父子切片转向量。网页会抓取公网 HTML，正文入库，HTML 快照存 COS。公开 Git 仓库做浅克隆，最多 40 个可解析文件，每个文件一条文档。旧版 `.doc` 需要先另存为 `.docx`。
 
-COS 用 `server/.env` 里的 `COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_BUCKET`、`COS_REGION`，可选 `COS_PREFIX`（默认 `kb/`）。没配齐时上传接口会直接说明缺哪几项。删除文档时会顺带删掉对应对象。
+COS 用 `server/.env` 里的 `COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_BUCKET`、`COS_REGION`，可选 `COS_PREFIX`（默认 `kb/`）。没配齐时上传接口会直接说明缺哪几项。删除文档时会顺带删掉对应对象。进程跑在与桶同地域的腾讯云服务器上时，设 `COS_INTERNAL=true`，上传和下载走内网域名。本机开发保持关闭。
 
 任务记在 `kb_jobs`，由当前 Node 进程排队执行。服务重启后，没跑完的任务会重新执行。文件要先传到 COS，重启后才能继续解析。网页抓取拒绝内网地址，仓库克隆限时 60 秒。
 

@@ -194,11 +194,11 @@ router.post('/embeddings/:action', async (req, res) => {
 });
 
 /**
- * GET /api/knowledge
- * 列出全部条目（按更新时间倒序）
+ * GET /api/knowledge?q=
+ * 列出条目（按更新时间倒序）。正文只带开头预览，全文用 GET /:id。
  */
 router.get('/', async (req, res) => {
-  const entries = await listEntries();
+  const entries = await listEntries(req.query.q);
   res.json({ entries });
 });
 

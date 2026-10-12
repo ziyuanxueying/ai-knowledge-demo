@@ -166,6 +166,20 @@ chmod 600 /opt/ai-knowledge-demo/prod.env
 
 `DATA_DIR` 用来持久化 Prompt 实验室的 `prompts.json`。会话和知识库在 Postgres 里，不靠这个目录。
 
+知识库原文在腾讯云 COS 时，把 `COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_BUCKET`、`COS_REGION`、`COS_PREFIX` 一并写入 `prod.env`。这台服务器在腾讯云、且地域和 `COS_REGION` 相同（当前桶是 `ap-beijing`，服务器也要在北京）时，再加：
+
+```env
+COS_INTERNAL=true
+```
+
+应用会改走 `桶名.cos-internal.地域.tencentcos.cn`。部署后在服务器上确认解析到的是内网地址（`10.`、`100.64.` 或 `169.254.` 开头）：
+
+```bash
+docker compose -f docker-compose.prod.yml exec app node -e "require('dns').lookup(process.env.COS_BUCKET+'.cos-internal.'+process.env.COS_REGION+'.tencentcos.cn',(e,a)=>console.log(e||a))"
+```
+
+服务器不在腾讯云、或地域和桶不一致时不要加这一行，内网域名连不上，文件入库会失败。本机 `server/.env` 保持 `COS_INTERNAL=false`。
+
 ---
 
 ## 步骤 8：创建三个生产文件
@@ -222,20 +236,17 @@ EOF
 把 `YOUR_DOMAIN` 全部换成你的域名后粘贴：
 
 ```nginx
-upstream app_upstream {
-    server app:3001;
-}
-
+docker exec deploy-nginx-1 sh -c 'cat > /etc/nginx/conf.d/default.conf << '\''EOF'\''
 server {
     listen 80;
-    server_name YOUR_DOMAIN;
-
+    server_name fengjie-an.cn;
+    resolver 127.0.0.11 valid=10s;
+    set $app_upstream "app:3001";
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
-
     location /api/ {
-        proxy_pass http://app_upstream;
+        proxy_pass http://$app_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -244,9 +255,8 @@ server {
         proxy_cache off;
         proxy_read_timeout 300s;
     }
-
     location / {
-        proxy_pass http://app_upstream;
+        proxy_pass http://$app_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -254,6 +264,8 @@ server {
         proxy_read_timeout 300s;
     }
 }
+EOF
+nginx -t && nginx -s reload'
 ```
 
 `/api/` 必须 `proxy_buffering off`，且 `proxy_pass` 不要写成 `http://app_upstream/;`（结尾斜杠会把 `/api/` 前缀剥掉，后端收不到原路径）。缓冲开着时，对话会「卡很久然后一次性出字」（SSE 被 Nginx 攒着）。
@@ -509,26 +521,55 @@ sudo crontab -e
 
 ## 上线之后怎么用
 
-以下不是首次部署的必做项，日常维护时按需执行。命令都在服务器 `/opt/ai-knowledge-demo/deploy` 下。
+以下不是首次部署的必做项，日常维护时按需执行。除「更新代码上线」里的本机推送外，命令都在服务器 `/opt/ai-knowledge-demo/deploy` 下。
 
 ### 更新代码上线
 
-**为了：** 把 Git 上的新前端/后端打进新镜像。只重启旧容器看不到界面变化。数据库卷不会丢。
+**为了：** 本机改完并推到 GitHub 之后，在服务器上拉下新代码，把新的前端和后端打进应用镜像。只重启旧容器看不到界面变化。数据库卷不会丢。
+
+#### 本机：推到 GitHub
+
+在自己电脑的项目目录里执行。提交前先看 `git status`：不要把 `server/.env`、`prod.env` 或任何密钥加进去。`.gitignore` 已忽略 `.env`；`prod.env` 只放在服务器上，不在这个仓库里。
 
 ```bash
+cd /path/to/ai-knowledge-demo
+git status
+git add .
+git commit -m "说明这次改了什么"
+git push
+```
+
+`git push` 推的是当前分支。这个分支第一次推到 GitHub 时，按 Git 的提示加上远程和上游，例如 `git push -u origin main`。
+
+#### 服务器：拉取并重新部署
+
+```bash
+ssh root@YOUR_SERVER_IP
 cd /opt/ai-knowledge-demo
 git pull
 cd deploy
 docker compose -f docker-compose.prod.yml up -d --build --no-deps app
 ```
 
-`--no-deps` 只重建并重启 `app`，不会顺带动 `postgres` / `nginx`。
+`--no-deps` 只重建并重启 `app`，不会顺带动 `postgres` / `nginx`。`pgdata` 里的会话和知识库还在。
 
-注意：`deploy/` 里你手写的文件若不在 Git 里，`git pull` 不会覆盖它们，这是预期行为。
+只执行 `docker compose restart app`，或不加 `--build`，用的仍是旧镜像，界面和接口都不会变。改了 `client/` 或 `server/` 都要重建这一个 `app`：页面打在镜像里的 `client/dist`，没有单独的前端容器。
+
+`prod.env` 和你在服务器上手写的 `deploy/`（Dockerfile、Compose、Nginx 配置）不在 Git 里。`git pull` 不会覆盖它们。
+
+确认新容器已起来（把 `YOUR_DOMAIN` 换成你的域名）：
+
+```bash
+cd /opt/ai-knowledge-demo/deploy
+docker compose -f docker-compose.prod.yml ps
+curl -sS https://YOUR_DOMAIN/api/health
+```
+
+`app` 应为 `running`。健康检查应类似 `"status":"ok"` 且 `"db":"ok"`。浏览器若还是旧界面，强制刷新。
 
 ### 单独部署前端 / 后端
 
-**为了：** 已经整套跑着之后，只更新某一层，不必再 `up -d --build` 全部服务。
+**为了：** 已经按上一节「更新代码上线」把代码拉到服务器之后，只更新某一层，不必再 `up -d --build` 全部服务。代码还在 GitHub、服务器还没 `git pull` 时，先做上一节。
 
 生产里**没有**独立的前端容器。浏览器看到的页面是构建进 `app` 镜像的 `client/dist`，由 Node 和 API 一起提供；`nginx` 只做反向代理和 HTTPS。所以：
 

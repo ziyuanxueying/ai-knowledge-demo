@@ -34,8 +34,7 @@ export const config = {
     apiKey: process.env.DASHSCOPE_API_KEY || '',
     // OpenAI 兼容接口的基础地址（通义千问）
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    // 默认模型
-    model: process.env.QWEN_MODEL || 'qwen-turbo',
+    model: process.env.QWEN_MODEL,
     // 温度：控制回答的随机性
     temperature: Number.parseFloat(process.env.TEMPERATURE || '0.7'),
     // 最大输出 Token 数
@@ -64,6 +63,8 @@ export const config = {
     bucket: process.env.COS_BUCKET || '',
     region: process.env.COS_REGION || '',
     prefix: process.env.COS_PREFIX || 'kb/',
+    // 独立内网域名只在腾讯云同地域内网可解析。本机和跨云服务器必须保持 false。
+    internal: process.env.COS_INTERNAL === 'true',
   },
 };
 

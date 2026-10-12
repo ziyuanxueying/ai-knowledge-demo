@@ -144,6 +144,13 @@ function rowToEntry(row, { stripEmbedding = true } = {}) {
     keywords: JSON.parse(row.keywords || '[]'),
     category: row.category,
     content: row.content,
+    preview: row.preview != null ? row.preview : undefined,
+    contentLength:
+      row.contentLength != null
+        ? Number(row.contentLength)
+        : row.content != null
+          ? String(row.content).length
+          : undefined,
     sourceType: row.sourceType || 'manual',
     sourceUrl: row.sourceUrl || '',
     cosKey: row.cosKey || '',
@@ -275,15 +282,34 @@ export async function seedIfEmpty() {
 }
 
 /**
- * 列出全部条目（按更新时间倒序，剥离向量）
+ * 列出条目（按更新时间倒序）。
+ * 只返回正文开头，避免一本大文档把列表接口拖慢。全文走 getEntry。
+ * @param {string} [queryText] 按标题、关键词、分类、正文子串过滤
  */
-export async function listEntries() {
+export async function listEntries(queryText = '') {
+  const q = String(queryText || '').trim().toLowerCase();
+  const params = [];
+  let where = '';
+  if (q) {
+    params.push(q);
+    where = `WHERE (
+      strpos(lower(title), $1) > 0
+      OR strpos(lower(keywords), $1) > 0
+      OR strpos(lower(coalesce(category, '')), $1) > 0
+      OR strpos(lower(content), $1) > 0
+    )`;
+  }
   const res = await sql(
-    `SELECT ${ENTRY_COLS},
+    `SELECT id, title, keywords, category,
+            left(content, 280) AS preview,
+            length(content)::int AS "contentLength",
+            "sourceType", "sourceUrl", "cosKey", "ingestStatus", "ingestError", "createdAt", "updatedAt",
             (SELECT COUNT(*)::int FROM kb_chunks p WHERE p."entryId" = kb_entries.id AND p."parentId" IS NULL) AS "parentCount",
             (SELECT COUNT(*)::int FROM kb_chunks c WHERE c."entryId" = kb_entries.id AND c."parentId" IS NOT NULL) AS "childCount"
      FROM kb_entries
-     ORDER BY "updatedAt" DESC`
+     ${where}
+     ORDER BY "updatedAt" DESC`,
+    params
   );
   return res.rows.map((r) => rowToEntry(r));
 }
