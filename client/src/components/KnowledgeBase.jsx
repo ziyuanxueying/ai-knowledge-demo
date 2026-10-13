@@ -16,6 +16,15 @@ import {
 } from '../utils/api.js';
 import MenuButton from './MenuButton.jsx';
 
+function assertIngestResult(data) {
+  if (data?.duplicate) {
+    const error = new Error(data.error || '内容已在知识库中');
+    error.duplicate = true;
+    throw error;
+  }
+  if (data?.error) throw new Error(data.error);
+}
+
 function formatChars(count) {
   const n = Number(count) || 0;
   if (n >= 10000) return `${(n / 10000).toFixed(n >= 100000 ? 0 : 1)} 万字`;
@@ -352,10 +361,10 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
               setError(null);
               try {
                 const data = await uploadKnowledgeBinary(file);
-                if (data.error) throw new Error(data.error);
+                assertIngestResult(data);
                 await load();
               } catch (e) {
-                setError(`上传失败：${e.message}`);
+                setError(e.duplicate ? e.message : `上传失败：${e.message}`);
               }
             }}
           />
@@ -379,11 +388,11 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
             setError(null);
             try {
               const data = await ingestWebUrl(webUrl.trim());
-              if (data.error) throw new Error(data.error);
+              assertIngestResult(data);
               setWebUrl('');
               await load();
             } catch (e) {
-              setError(`网页入库失败：${e.message}`);
+              setError(e.duplicate ? e.message : `网页入库失败：${e.message}`);
             }
           }}
         >

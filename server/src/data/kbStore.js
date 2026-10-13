@@ -11,12 +11,29 @@
  * - 关键词检索、相似度阈值、Top-K 等逻辑不变
  */
 
+import { createHash } from 'node:crypto';
 import { config } from '../config/index.js';
 import { query as sql, withTransaction, toVectorSql } from './db.js';
 import { embedTexts, hasEmbeddingConfig } from '../services/embedding.service.js';
 import { buildChildEmbedText, chunkDocument } from '../rag/chunker.js';
 
-// 种子数据：表为空且没有 knowledge.json 时写入，让 Agent 有内容可搜
+/** 同一文件的内容指纹。SHA-256 十六进制，按原始字节计算，不看文件名。 */
+export function hashBuffer(buffer) {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+export class DuplicateKnowledgeError extends Error {
+  constructor(entry, kind = 'file') {
+    const label = kind === 'web' ? '网页' : '文件';
+    const state = !entry || entry.ingestStatus === 'ready' ? '已在知识库中' : '正在解析';
+    const title = entry?.title ? `（${entry.title}）` : '';
+    super(`该${label}${state}${title}`);
+    this.name = 'DuplicateKnowledgeError';
+    this.entry = entry || null;
+  }
+}
+
+// 种子数据：知识库表为空时写入，让 Agent 有内容可搜
 const SEED_ENTRIES = [
   {
     title: '虚拟 DOM',
@@ -382,17 +399,84 @@ export async function deleteEntry(id) {
 }
 
 /**
- * 先占一条「解析中」的文档，正文等异步任务写回后再切块。
+ * 查找未失败、且内容指纹相同的条目。失败记录不占用指纹，允许重新上传。
  */
-export async function createPendingEntry({ title, sourceType, sourceUrl = '', category = '' }) {
+export async function findActiveEntryByContentHash(contentHash) {
+  const hash = String(contentHash || '').trim();
+  if (!hash) return null;
+  const res = await sql(
+    `SELECT ${ENTRY_COLS} FROM kb_entries
+     WHERE "contentHash" = $1 AND "ingestStatus" <> 'failed'
+     ORDER BY "updatedAt" DESC
+     LIMIT 1`,
+    [hash]
+  );
+  return rowToEntry(res.rows[0]);
+}
+
+/** 同一网页地址只保留一条未失败的记录。 */
+export async function findActiveWebEntry(sourceUrl) {
+  const url = String(sourceUrl || '').trim();
+  if (!url) return null;
+  const res = await sql(
+    `SELECT ${ENTRY_COLS} FROM kb_entries
+     WHERE "sourceType" = 'web' AND "sourceUrl" = $1 AND "ingestStatus" <> 'failed'
+     ORDER BY "updatedAt" DESC
+     LIMIT 1`,
+    [url]
+  );
+  return rowToEntry(res.rows[0]);
+}
+
+/**
+ * 把指纹写到指定文档上。已有相同指纹时返回 duplicate，文档不存在返回 missing。
+ */
+export async function claimContentHash(id, contentHash) {
+  try {
+    const res = await sql(
+      `UPDATE kb_entries SET "contentHash" = $1
+       WHERE id = $2 AND ("contentHash" = '' OR "contentHash" = $1)`,
+      [contentHash, id]
+    );
+    return res.rowCount > 0 ? 'ok' : 'missing';
+  } catch (err) {
+    if (err.code === '23505') return 'duplicate';
+    throw err;
+  }
+}
+
+export async function listEntriesMissingContentHash() {
+  const res = await sql(
+    `SELECT id, "cosKey" FROM kb_entries
+     WHERE "contentHash" = '' AND "cosKey" <> '' AND "ingestStatus" = 'ready'`
+  );
+  return res.rows;
+}
+
+/**
+ * 先占一条「解析中」的文档，正文等异步任务写回后再切块。
+ * contentHash 非空时，未失败的相同文件会被唯一索引拒绝。
+ */
+export async function createPendingEntry({ title, sourceType, sourceUrl = '', category = '', contentHash = '' }) {
   const now = new Date().toISOString();
   const id = genId();
-  await sql(
-    `INSERT INTO kb_entries
-       (id, title, keywords, category, content, embedding, "sourceType", "sourceUrl", "cosKey", "ingestStatus", "ingestError", "createdAt", "updatedAt")
-     VALUES ($1, $2, '[]', $3, '', NULL, $4, $5, '', 'pending', '', $6, $6)`,
-    [id, String(title || '').trim() || '未命名文档', String(category || '').trim(), sourceType, sourceUrl, now]
-  );
+  const hash = String(contentHash || '').trim();
+  try {
+    await sql(
+      `INSERT INTO kb_entries
+         (id, title, keywords, category, content, embedding, "sourceType", "sourceUrl", "cosKey", "contentHash", "ingestStatus", "ingestError", "createdAt", "updatedAt")
+       VALUES ($1, $2, '[]', $3, '', NULL, $4, $5, '', $6, 'pending', '', $7, $7)`,
+      [id, String(title || '').trim() || '未命名文档', String(category || '').trim(), sourceType, sourceUrl, hash, now]
+    );
+  } catch (err) {
+    if (err.code !== '23505') throw err;
+    if (sourceType === 'web') {
+      const existing = await findActiveWebEntry(sourceUrl);
+      throw new DuplicateKnowledgeError(existing, 'web');
+    }
+    const existing = hash ? await findActiveEntryByContentHash(hash) : null;
+    throw new DuplicateKnowledgeError(existing, 'file');
+  }
   return getEntryWithCounts(id);
 }
 

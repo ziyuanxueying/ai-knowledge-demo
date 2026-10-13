@@ -10,6 +10,10 @@ import {
   ensureEmbeddings,
   regenerateAllEmbeddings,
   stats,
+  hashBuffer,
+  findActiveEntryByContentHash,
+  findActiveWebEntry,
+  DuplicateKnowledgeError,
 } from '../data/kbStore.js';
 import { searchCompare } from '../rag/retrieve.js';
 import { enqueueJob, listJobs } from '../rag/ingest.js';
@@ -95,11 +99,15 @@ router.post('/ingest/file', (req, res, next) => {
     if (!file) return res.status(400).json({ error: '请选择文件' });
     const filename = decodeFilename(file.originalname || 'file');
     const title = filename.replace(/\.[^.]+$/, '') || filename;
+    const contentHash = hashBuffer(file.buffer);
+    const existing = await findActiveEntryByContentHash(contentHash);
+    if (existing) throw new DuplicateKnowledgeError(existing, 'file');
     const entry = await createPendingEntry({
       title,
       sourceType: 'file',
       sourceUrl: filename,
       category: req.body?.category || '',
+      contentHash,
     });
     const cosKey = buildObjectKey(entry.id, filename);
     try {
@@ -115,6 +123,7 @@ router.post('/ingest/file', (req, res, next) => {
     });
     res.status(202).json({ entry: { ...entry, cosKey, ingestStatus: 'pending' }, jobId });
   } catch (err) {
+    if (err instanceof DuplicateKnowledgeError) return sendDuplicate(res, err);
     res.status(400).json({ error: err.message || '上传失败' });
   }
 });
@@ -128,6 +137,8 @@ router.post('/ingest/url', async (req, res) => {
     assertCosConfig();
     const url = String(req.body?.url || '').trim();
     if (!url) return res.status(400).json({ error: 'url 不能为空' });
+    const existing = await findActiveWebEntry(url);
+    if (existing) throw new DuplicateKnowledgeError(existing, 'web');
     const entry = await createPendingEntry({
       title: url,
       sourceType: 'web',
@@ -137,6 +148,7 @@ router.post('/ingest/url', async (req, res) => {
     const jobId = await enqueueJob({ type: 'web', entryId: entry.id, payload: { url } });
     res.status(202).json({ entry, jobId });
   } catch (err) {
+    if (err instanceof DuplicateKnowledgeError) return sendDuplicate(res, err);
     res.status(400).json({ error: err.message || '提交失败' });
   }
 });
@@ -258,6 +270,16 @@ router.delete('/:id', async (req, res) => {
   }
   res.json({ ok: true });
 });
+
+function sendDuplicate(res, err) {
+  res.status(409).json({
+    error: err.message,
+    duplicate: true,
+    entry: err.entry
+      ? { id: err.entry.id, title: err.entry.title, ingestStatus: err.entry.ingestStatus }
+      : undefined,
+  });
+}
 
 function decodeFilename(name) {
   if (/[^\u0000-\u00ff]/.test(name)) return name;

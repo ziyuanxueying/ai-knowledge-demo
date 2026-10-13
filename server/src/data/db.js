@@ -13,7 +13,7 @@
  * - 通过 DATABASE_URL（或 PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD）配置连接。
  *
  * 【数据迁移】：
- * - 旧的 knowledge.json / history.json 仍是"首次启动"的迁移源，表为空且文件存在时自动导入（幂等）。
+ * - 旧的 history.json 仍是会话的首次启动迁移源，表为空且文件存在时自动导入（幂等）。
  * - 会话/消息/知识库/向量统一存 Postgres；prompts.json 仍为文件存储（见 promptStore.js）。
  */
 
@@ -35,7 +35,6 @@ pool.on('error', (err) => {
 });
 
 const HISTORY_JSON = path.join(__dirname, '..', 'history.json');
-const KB_JSON = path.join(__dirname, 'knowledge.json');
 
 const VECTOR_DIM = Number(config.embeddingDim);
 
@@ -148,6 +147,21 @@ export async function initDB() {
   await pool.query(`ALTER TABLE kb_entries ADD COLUMN IF NOT EXISTS "cosKey" TEXT NOT NULL DEFAULT ''`);
   await pool.query(`ALTER TABLE kb_entries ADD COLUMN IF NOT EXISTS "ingestStatus" TEXT NOT NULL DEFAULT 'ready'`);
   await pool.query(`ALTER TABLE kb_entries ADD COLUMN IF NOT EXISTS "ingestError" TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE kb_entries ADD COLUMN IF NOT EXISTS "contentHash" TEXT NOT NULL DEFAULT ''`);
+  // 空指纹（手工条目）和解析失败的记录不占唯一约束，失败后可以重新上传同一文件。
+  // 库里若已有重复网页地址，唯一索引建不上，查重仍由写入前的查询完成。
+  await createUniqueIndex(
+    'idx_kb_entries_content_hash',
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_entries_content_hash
+     ON kb_entries ("contentHash")
+     WHERE "contentHash" <> '' AND "ingestStatus" <> 'failed'`
+  );
+  await createUniqueIndex(
+    'idx_kb_entries_web_url',
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_entries_web_url
+     ON kb_entries ("sourceUrl")
+     WHERE "sourceType" = 'web' AND "sourceUrl" <> '' AND "ingestStatus" <> 'failed'`
+  );
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kb_jobs (
@@ -213,6 +227,14 @@ async function ensureChunkEmbeddingDim() {
   await createChunkHnsw();
 }
 
+async function createUniqueIndex(name, sqlText) {
+  try {
+    await pool.query(sqlText);
+  } catch (err) {
+    console.warn(`[DB] 唯一索引 ${name} 未建立：`, err.message);
+  }
+}
+
 async function createChunkHnsw() {
   try {
     await pool.query(`
@@ -266,36 +288,6 @@ async function migrateFromJSON() {
       }
     } catch (err) {
       console.error('[DB] 迁移会话历史失败:', err.message);
-    }
-  }
-
-  const kbCount = (await query('SELECT COUNT(*)::int AS c FROM kb_entries')).rows[0].c;
-  if (kbCount === 0 && fs.existsSync(KB_JSON)) {
-    try {
-      const { entries } = JSON.parse(fs.readFileSync(KB_JSON, 'utf-8'));
-      if (entries && entries.length > 0) {
-        await withTransaction(async (client) => {
-          for (const e of entries) {
-            await client.query(
-              `INSERT INTO kb_entries (id, title, keywords, category, content, embedding, "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8)`,
-              [
-                e.id,
-                e.title || '',
-                JSON.stringify(e.keywords || []),
-                e.category || '',
-                e.content || '',
-                e.embedding ? toVectorSql(e.embedding) : null,
-                e.createdAt || new Date().toISOString(),
-                e.updatedAt || new Date().toISOString(),
-              ]
-            );
-          }
-        });
-        console.log(`[DB] 已从 knowledge.json 迁移 ${entries.length} 条知识库条目`);
-      }
-    } catch (err) {
-      console.error('[DB] 迁移知识库失败:', err.message);
     }
   }
 }
