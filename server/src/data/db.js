@@ -97,10 +97,12 @@ export async function initDB() {
       title         TEXT NOT NULL DEFAULT '新对话',
       summary       TEXT NOT NULL DEFAULT '',
       "summaryUpTo" INTEGER NOT NULL DEFAULT 0,
+      mode          TEXT NOT NULL DEFAULT 'chat',
       "createdAt"   TEXT NOT NULL,
       "updatedAt"   TEXT NOT NULL
     )
   `);
+  await pool.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'chat'`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -220,6 +222,7 @@ export async function initDB() {
   await ensureEmbeddingColumn('kb_chunks', 'idx_kb_chunks_embedding');
 
   await migrateFromJSON();
+  await backfillAgentSessionTitles();
 }
 
 /**
@@ -271,6 +274,29 @@ async function createHnsw(table, indexName) {
   } catch (err) {
     console.warn(`[DB] ${table} HNSW 索引创建失败，语义检索将走顺序扫描：`, err.message);
   }
+}
+
+/**
+ * 旧版 Agent 会话标题固定为「Agent 任务」。
+ * 改成首条用户任务的前 20 字，并用 mode 区分对话和 Agent。
+ */
+async function backfillAgentSessionTitles() {
+  await pool.query(`
+    UPDATE sessions AS s
+    SET
+      mode = 'agent',
+      title = COALESCE(
+        NULLIF((
+          SELECT left(m.content, 20)
+          FROM messages AS m
+          WHERE m."sessionId" = s.id AND m.role = 'user'
+          ORDER BY m.seq ASC
+          LIMIT 1
+        ), ''),
+        '新对话'
+      )
+    WHERE s.title = 'Agent 任务'
+  `);
 }
 
 /** 从旧的 JSON 文件迁移数据到 Postgres（幂等） */

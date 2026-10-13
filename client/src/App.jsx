@@ -22,7 +22,7 @@ export default function App() {
   const [mode, setMode] = useState('chat'); // 'chat' | 'agent'
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const chat = useChat();
-  const agent = useAgent();
+  const agent = useAgent(chat.loadSessions);
 
   // 当前模式对应的接口
   const isAgent = mode === 'agent';
@@ -98,11 +98,23 @@ export default function App() {
     }
   };
 
-  // 切换会话：同时切回 chat 视图
+  // 切换会话：按会话 mode 打开对话或 Agent
   const handleSwitchSession = (id) => {
     setView('chat');
     closeSidebar();
+    const target = sessions.find((s) => s.id === id);
+    if (target?.mode === 'agent') {
+      setMode('agent');
+      agent.loadSession(id);
+      return;
+    }
+    setMode('chat');
     chat.switchSession(id);
+  };
+
+  const handleDeleteSession = (id) => {
+    chat.removeSession(id);
+    if (id === agent.currentSessionId) agent.newChat();
   };
 
   // 切换模式时清空当前模式的消息状态
@@ -131,7 +143,7 @@ export default function App() {
         currentSessionId={currentSessionId}
         onNewChat={handleNewChat}
         onSwitch={handleSwitchSession}
-        onDelete={chat.removeSession}
+        onDelete={handleDeleteSession}
         view={view}
         onClose={closeSidebar}
         onOpenKnowledge={() => {

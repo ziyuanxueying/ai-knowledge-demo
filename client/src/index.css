@@ -203,6 +203,26 @@ body {
   align-items: center;
 }
 
+.session-mode {
+  flex: none;
+  margin-right: 8px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
+.session-mode.is-chat {
+  color: rgba(236, 236, 241, 0.72);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.session-mode.is-agent {
+  color: #d1fae5;
+  background: rgba(16, 163, 127, 0.45);
+}
+
 .session-title {
   flex: 1;
   overflow: hidden;

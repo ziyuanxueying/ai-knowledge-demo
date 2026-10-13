@@ -77,6 +77,9 @@ export default function Sidebar({
                 className="session-item-main"
                 onClick={() => onSwitch(s.id)}
               >
+                <span className={`session-mode ${s.mode === 'agent' ? 'is-agent' : 'is-chat'}`}>
+                  {s.mode === 'agent' ? 'Agent' : '对话'}
+                </span>
                 <span className="session-title">{s.title || '新对话'}</span>
               </button>
               <button

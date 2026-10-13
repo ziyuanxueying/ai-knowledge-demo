@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
-import { sendAgentTask } from '../utils/api.js'
+import { getSessionDetail, sendAgentTask } from '../utils/api.js'
 
 /**
  * Agent 模式 Hook
@@ -10,7 +10,7 @@ import { sendAgentTask } from '../utils/api.js'
  *
  * 关键区别：AI 消息多了 steps 字段，记录工具调用过程。
  */
-export function useAgent() {
+export function useAgent(onTurnEnd) {
   const [messages, setMessages] = useState([])
   const [currentSessionId, setCurrentSessionId] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -129,6 +129,7 @@ export function useAgent() {
             })
             setLoading(false)
             abortRef.current = null
+            onTurnEnd?.()
           },
           onError: msg => {
             setError(msg || 'Agent 执行失败')
@@ -144,11 +145,12 @@ export function useAgent() {
             })
             setLoading(false)
             abortRef.current = null
+            onTurnEnd?.()
           },
         }
       )
     },
-    [loading, currentSessionId]
+    [loading, currentSessionId, onTurnEnd]
   )
 
   /** 停止生成 */
@@ -164,7 +166,23 @@ export function useAgent() {
       }
       return next
     })
-  }, [])
+    onTurnEnd?.()
+  }, [onTurnEnd])
+
+  /** 打开已有 Agent 会话 */
+  const loadSession = useCallback(async sessionId => {
+    if (sessionId === currentSessionId) return
+    setError(null)
+    setPreviewMessages(null)
+    try {
+      const { session } = await getSessionDetail(sessionId)
+      if (!session) throw new Error('会话不存在')
+      setCurrentSessionId(sessionId)
+      setMessages(session.messages || [])
+    } catch {
+      setError('加载会话失败')
+    }
+  }, [currentSessionId])
 
   /** 新建对话 */
   const newChat = useCallback(() => {
@@ -182,6 +200,7 @@ export function useAgent() {
     error,
     sendTask,
     stopGenerate,
+    loadSession,
     newChat,
   }
 }

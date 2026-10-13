@@ -54,7 +54,7 @@ router.post('/', async (req, res) => {
     // 获取或创建会话（复用聊天会话存储）
     let session = sessionId ? await getSession(sessionId) : null;
     if (!session) {
-      session = await createSession('Agent 任务');
+      session = await createSession('新对话', 'agent');
     }
 
     // 当前任务还没写入，摘要只覆盖更早的 user/assistant 正文。

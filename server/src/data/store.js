@@ -33,6 +33,7 @@ export async function listSessionSummaries() {
     SELECT
       s.id,
       s.title,
+      s.mode,
       s."createdAt",
       s."updatedAt",
       COUNT(m.id)::int AS "messageCount"
@@ -68,13 +69,15 @@ export async function readAllSessions() {
 /**
  * 创建新会话
  * @param {string} title - 会话标题
+ * @param {'chat'|'agent'} [mode] - 对话或 Agent
  * @returns {Promise<object>} 新会话对象（含空 messages 数组）
  */
-export async function createSession(title = '新对话') {
+export async function createSession(title = '新对话', mode = 'chat') {
   const now = new Date().toISOString();
   const session = {
     id: `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     title,
+    mode: mode === 'agent' ? 'agent' : 'chat',
     messages: [],
     summary: '',
     summaryUpTo: 0,
@@ -82,9 +85,17 @@ export async function createSession(title = '新对话') {
     updatedAt: now,
   };
   await query(
-    `INSERT INTO sessions (id, title, summary, "summaryUpTo", "createdAt", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [session.id, session.title, session.summary, session.summaryUpTo, session.createdAt, session.updatedAt]
+    `INSERT INTO sessions (id, title, summary, "summaryUpTo", mode, "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      session.id,
+      session.title,
+      session.summary,
+      session.summaryUpTo,
+      session.mode,
+      session.createdAt,
+      session.updatedAt,
+    ]
   );
   return session;
 }
