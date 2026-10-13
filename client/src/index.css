@@ -770,6 +770,122 @@ body {
   color: var(--text-secondary);
 }
 
+.kb-eval-panel {
+  background: rgba(16, 163, 127, 0.03);
+}
+
+.kb-eval-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.kb-eval-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.kb-eval-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.kb-eval-copy .kb-rag-title {
+  margin-bottom: 0;
+}
+
+.kb-eval-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.kb-eval-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: none;
+}
+
+.kb-eval-score {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.kb-eval-score.is-pass {
+  color: #0f7b4c;
+}
+
+.kb-eval-score.is-fail {
+  color: #b42318;
+}
+
+.kb-eval-error {
+  margin-top: 8px;
+  color: #b42318;
+  font-size: 13px;
+}
+
+.kb-eval-list {
+  max-height: 320px;
+  margin-top: 10px;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.kb-eval-row {
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+}
+
+.kb-eval-row:last-child {
+  border-bottom: none;
+}
+
+.kb-eval-row.is-miss {
+  background: #fff6f5;
+}
+
+.kb-eval-mark {
+  flex: none;
+  height: 22px;
+  margin-top: 1px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(15, 123, 76, 0.1);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 22px;
+  color: #0f7b4c;
+}
+
+.kb-eval-row.is-miss .kb-eval-mark {
+  background: rgba(180, 35, 24, 0.1);
+  color: #b42318;
+}
+
+.kb-eval-q {
+  color: var(--text-primary);
+}
+
+.kb-eval-detail {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 /* ===== RAG：检索对比面板 ===== */
 .kb-rag-panel {
   padding: 12px 20px;
@@ -988,6 +1104,16 @@ body {
 @media (max-width: 640px) {
   .kb-rag-compare {
     grid-template-columns: 1fr;
+  }
+
+  .kb-eval-bar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .kb-eval-actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 }
 

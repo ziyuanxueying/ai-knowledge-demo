@@ -299,6 +299,26 @@ export async function seedIfEmpty() {
 }
 
 /**
+ * 按标题补齐内置种子。已有同名文档时不覆盖，避免评测改掉用户上传的内容。
+ */
+export async function ensureSeedEntries() {
+  let added = 0;
+  for (const entry of SEED_ENTRIES) {
+    const existing = await sql('SELECT id FROM kb_entries WHERE title = $1 LIMIT 1', [entry.title]);
+    if (existing.rowCount > 0) continue;
+    await createEntry({
+      title: entry.title,
+      keywords: entry.keywords,
+      category: entry.category,
+      content: entry.content,
+    });
+    added += 1;
+  }
+  if (added > 0) console.log(`[DB] 已补齐 ${added} 条内置种子文档`);
+  return added;
+}
+
+/**
  * 列出条目（按更新时间倒序）。
  * 只返回正文开头，避免一本大文档把列表接口拖慢。全文走 getEntry。
  * @param {string} [queryText] 按标题、关键词、分类、正文子串过滤

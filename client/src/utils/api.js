@@ -439,6 +439,13 @@ export async function ingestRepo(url, branch = '') {
   return res.json()
 }
 
+export async function runKnowledgeEval() {
+  const res = await fetch(`${API_BASE}/knowledge/eval`, { method: 'POST' })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || '检索回归失败')
+  return data
+}
+
 export async function searchKnowledge(q, mode = 'compare') {
   const url = `${API_BASE}/knowledge/search?q=${encodeURIComponent(q)}&mode=${mode}`
   const res = await fetch(url)

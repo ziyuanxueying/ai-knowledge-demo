@@ -7,6 +7,7 @@ import {
   deleteKnowledgeEntry,
   getKbStats,
   searchKnowledge,
+  runKnowledgeEval,
   regenerateKbEmbeddings,
   uploadKnowledgeBinary,
   ingestWebUrl,
@@ -144,6 +145,10 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
   const [ragQuery, setRagQuery] = useState('');
   const [ragResults, setRagResults] = useState(null); // { query, keyword: [], semantic: [] }
   const [ragLoading, setRagLoading] = useState(false);
+  const [evalReport, setEvalReport] = useState(null);
+  const [evalLoading, setEvalLoading] = useState(false);
+  const [evalError, setEvalError] = useState('');
+  const [evalOpen, setEvalOpen] = useState(false);
   const [embeddingLoading, setEmbeddingLoading] = useState(false);
   const [webUrl, setWebUrl] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
@@ -301,6 +306,19 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
   };
 
   const closeReader = useCallback(() => setReader(null), []);
+
+  const handleEval = async () => {
+    setEvalLoading(true);
+    setEvalError('');
+    try {
+      setEvalReport(await runKnowledgeEval());
+      setEvalOpen(true);
+    } catch (e) {
+      setEvalError(e.message || '检索回归失败');
+    } finally {
+      setEvalLoading(false);
+    }
+  };
 
   // RAG：检索对比
   const handleRagSearch = async () => {
@@ -482,6 +500,65 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
                 : '重新生成全部向量'}
           </button>
         </div>
+      </div>
+
+      <div className="kb-rag-panel kb-eval-panel">
+        <div className="kb-eval-bar">
+          <div className="kb-eval-copy">
+            <div className="kb-eval-heading">
+              <div className="kb-rag-title">检索回归</div>
+              {evalReport && (
+                <span className={`kb-eval-score${evalReport.hits === evalReport.total ? ' is-pass' : ' is-fail'}`}>
+                  前 3 条命中 {evalReport.hits}/{evalReport.total}（{(evalReport.rate * 100).toFixed(1)}%）
+                </span>
+              )}
+            </div>
+            <p className="kb-eval-desc">
+              用固定的 42 道题，检查期望文档有没有出现在前 3 条结果里。
+            </p>
+          </div>
+          <div className="kb-eval-actions">
+            {evalReport && (
+              <button
+                type="button"
+                className="kb-rag-btn"
+                onClick={() => setEvalOpen((open) => !open)}
+                aria-expanded={evalOpen}
+              >
+                {evalOpen ? '收起明细' : '展开明细'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="kb-rag-search-btn"
+              onClick={handleEval}
+              disabled={evalLoading}
+            >
+              {evalLoading ? '正在评测…' : '运行检索评测'}
+            </button>
+          </div>
+        </div>
+        {evalError && <div className="kb-eval-error">{evalError}</div>}
+        {evalReport && evalOpen && (
+          <div className="kb-eval-list">
+            {[...evalReport.cases].sort((a, b) => Number(a.ok) - Number(b.ok)).map((item) => (
+              <div key={`${item.q}-${item.category}-${item.expect}`} className={`kb-eval-row${item.ok ? '' : ' is-miss'}`}>
+                <span className="kb-eval-mark">{item.ok ? '通过' : '未过'}</span>
+                <div className="kb-eval-body">
+                  <div className="kb-eval-q">
+                    {item.q}
+                    {item.category ? <span className="kb-rag-result-cat">{item.category}</span> : null}
+                  </div>
+                  <div className="kb-eval-detail">
+                    {item.expect}
+                    {' · 实际 '}
+                    {item.titles.length ? item.titles.join('、') : '空'}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* RAG：检索对比面板 */}

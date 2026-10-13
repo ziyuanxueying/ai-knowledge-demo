@@ -1,42 +1,47 @@
 /**
- * 混合检索 Hit@3。
- * 用法：在 server 目录执行 npm run eval:rag
+ * 混合检索回归。不调用对话模型。
+ * 在 server 目录执行：npm run eval:rag
+ *
+ * 与 Agent 预检索同一条 retrieveHybrid：threshold 0.3、Top 3。
+ * 追问改写关闭。Rerank 是否启用只看 RERANK_MODEL，和线上一致。
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { config } from '../config/index.js';
 import { initDB, closeDB } from '../data/db.js';
-import { syncChunks } from '../data/kbStore.js';
-import { retrieveHybrid } from './retrieve.js';
+import { ensureSeedEntries, syncChunks } from '../data/kbStore.js';
+import { openDbTunnel } from '../sshTunnel.js';
+import { GOLDEN_TOP_K, loadGoldenCases, runGoldenEval } from './goldenEval.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const goldenPath = path.join(__dirname, '..', '..', 'eval', 'golden.json');
+const cases = loadGoldenCases();
+const rerank = config.dashscope.rerankModel || '未配置';
+console.log(`用例 ${cases.length} 条；Top ${GOLDEN_TOP_K}；threshold 0.3；追问改写关闭；Rerank ${rerank}`);
 
-const cases = JSON.parse(fs.readFileSync(goldenPath, 'utf-8'));
+const tunnel = await openDbTunnel();
+let exitCode = 1;
+try {
+  await initDB();
+  await ensureSeedEntries();
+  await syncChunks();
 
-await initDB();
-await syncChunks();
-
-let hits = 0;
-const misses = [];
-
-for (const item of cases) {
-  const found = await retrieveHybrid(item.q, { topK: 3, threshold: 0, rewrite: false, rerank: false });
-  const titles = found.hits.map((hit) => hit.title);
-  const ok = titles.includes(item.expectTitle);
-  if (ok) hits += 1;
-  else misses.push({ q: item.q, expectTitle: item.expectTitle, titles });
-  console.log(`${ok ? 'HIT' : 'MISS'}  ${item.q}  =>  ${titles.join(' | ') || '(空)'}`);
-}
-
-const rate = cases.length === 0 ? 0 : hits / cases.length;
-console.log(`\nHit@3 ${hits}/${cases.length} (${(rate * 100).toFixed(1)}%)`);
-if (misses.length > 0) {
-  console.log('未命中：');
-  for (const miss of misses) {
-    console.log(`- ${miss.q}（期望「${miss.expectTitle}」，实际 ${miss.titles.join('、') || '无'}）`);
+  const report = await runGoldenEval();
+  for (const item of report.cases) {
+    const scope = item.category ? ` [${item.category}]` : '';
+    const actual = item.titles.join(' | ') || '(空)';
+    console.log(`${item.ok ? 'HIT' : 'MISS'} ${item.q}${scope}  =>  ${actual}`);
   }
-}
 
-await closeDB();
-process.exit(misses.length > 0 ? 1 : 0);
+  console.log(`\nHit@${report.topK} ${report.hits}/${report.total} (${(report.rate * 100).toFixed(1)}%)`);
+  const misses = report.cases.filter((item) => !item.ok);
+  if (misses.length > 0) {
+    console.log('未通过：');
+    for (const miss of misses) {
+      const scope = miss.category ? ` [${miss.category}]` : '';
+      const actual = miss.titles.join('、') || '无';
+      console.log(`- ${miss.q}${scope}（${miss.failures.join('，')}，实际 ${actual}）`);
+    }
+  }
+  exitCode = misses.length > 0 ? 1 : 0;
+} finally {
+  await closeDB();
+  tunnel?.close();
+}
+process.exit(exitCode);

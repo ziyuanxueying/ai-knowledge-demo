@@ -16,6 +16,7 @@ import {
   DuplicateKnowledgeError,
 } from '../data/kbStore.js';
 import { searchCompare } from '../rag/retrieve.js';
+import { runGoldenEval } from '../rag/goldenEval.js';
 import { enqueueJob, listJobs } from '../rag/ingest.js';
 import { assertCosConfig, buildObjectKey, deleteObject, missingCosEnv, putObject } from '../storage/cos.js';
 
@@ -43,6 +44,18 @@ const router = Router();
  */
 router.get('/stats', async (req, res) => {
   res.json(await stats());
+});
+
+/**
+ * POST /api/knowledge/eval
+ * 跑固定考卷，返回 Hit@3 和每题对错。不调用对话模型。
+ */
+router.post('/eval', async (req, res) => {
+  try {
+    res.json(await runGoldenEval());
+  } catch (err) {
+    res.status(500).json({ error: err.message || '检索回归失败' });
+  }
 });
 
 /**
