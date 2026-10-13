@@ -178,3 +178,90 @@ export async function judgeAnswers({ question, answerA, answerB, labelA = '方�
     usage,
   }
 }
+
+function sourceBlock(citations) {
+  if (!citations?.length) return '（本次检索没有命中父块）'
+  return citations
+    .map((item) => {
+      const where = item.heading ? `${item.title} / ${item.heading}` : item.title
+      const excerpt = String(item.excerpt || '').slice(0, 800)
+      return `[${item.n}] ${where}\n${excerpt}`
+    })
+    .join('\n\n')
+}
+
+function buildGroundingPrompt(question, answer, citations) {
+  return `<role>
+你是检索增强回答的核对员。只根据给出的父块判断回答，不要用你自己的知识补全。
+</role>
+
+<task>
+检查两件事：
+1. 忠实：回答里的结论能否在父块中找到。没有命中父块时，回答必须写明知识库未收录，不能把常识或编造内容说成来自知识库。
+2. 引用：回答中每个 [n] 必须出现在来源列表里，且标了这个编号的那句话要能被该编号的父块支撑。有命中却把知识库结论写成没有编号，引用也不算对。没有命中时，回答里不该出现来源编号。
+</task>
+
+<input>
+<question>
+${question}
+</question>
+
+<sources>
+${sourceBlock(citations)}
+</sources>
+
+<answer>
+${answer}
+</answer>
+</input>
+
+<output_format>
+只输出一个 JSON 对象，不要输出其他文字，不要用 markdown 代码块包裹。格式：
+{
+  "faithful": true,
+  "citationsOk": true,
+  "faithfulReason": "一句话，说明结论是否贴着父块",
+  "citationsReason": "一句话，说明编号是否对得上对应父块"
+}
+faithful 和 citationsOk 只能是布尔值。不通过时在对应 reason 里指出具体句子。
+</output_format>`
+}
+
+function normalizeGrounding(parsed) {
+  const reasons = Array.isArray(parsed?.reasons) ? parsed.reasons.filter((item) => typeof item === 'string') : []
+  const faithful = parsed?.faithful === true
+  const citationsOk = parsed?.citationsOk === true
+  const faithfulReason = typeof parsed?.faithfulReason === 'string' ? parsed.faithfulReason.trim() : ''
+  const citationsReason = typeof parsed?.citationsReason === 'string' ? parsed.citationsReason.trim() : ''
+  return {
+    faithful,
+    citationsOk,
+    faithfulReason: faithfulReason || (!faithful ? reasons[0] || '' : ''),
+    citationsReason: citationsReason || (!citationsOk ? reasons[1] || reasons[0] || '' : ''),
+  }
+}
+
+/**
+ * 核对一次回答是否贴着本次检索到的父块，以及 [n] 是否对应该父块。
+ * 裁判用低温，并强制 JSON。不引入 RAGAS。
+ */
+export async function judgeGrounding({ question, answer, citations = [] }) {
+  const { content, usage } = await chat(
+    [
+      { role: 'system', content: '你是检索结果核对员，只输出 JSON。' },
+      { role: 'user', content: buildGroundingPrompt(question, answer, citations) },
+    ],
+    { temperature: 0.1, maxTokens: 500 }
+  )
+
+  const parsed = extractJson(content)
+  if (!parsed) {
+    throw new Error('裁判返回的内容无法解析为 JSON')
+  }
+
+  return {
+    ...normalizeGrounding(parsed),
+    raw: content,
+    usage,
+  }
+}

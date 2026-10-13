@@ -12,6 +12,7 @@ ai-knowledge-demo/
 │   ├── AI学习指南.md
 │   ├── 前端开发指南.md
 │   ├── 后端开发指南.md
+│   ├── RAG知识工程.md
 │   ├── 线上Docker部署手册.md
 │   └── 与企业级能力对照.md
 ├── docker-compose.yml   # 本地 PostgreSQL + pgvector
@@ -113,6 +114,7 @@ npm run dev
 | [AI学习指南](docs/AI学习指南.md) | AI 初学者 | LLM、Token、Prompt、流式、Function Calling、Agent、知识库等核心概念 |
 | [前端开发指南](docs/前端开发指南.md) | 前端开发者 | React 组件架构、Hooks、SSE 接收、样式、无障碍规则 |
 | [后端开发指南](docs/后端开发指南.md) | 后端开发者 | Express 架构、API、Postgres + pgvector、Agent、SSE |
+| [RAG知识工程](docs/RAG知识工程.md) | 知识库 | 父子切块、混合检索、引用，以及检索 Hit@3 与回答回归 |
 | [线上Docker部署手册](docs/线上Docker部署手册.md) | 部署 | 云服务器全 Docker：Postgres + 应用 + Nginx/HTTPS |
 | [与企业级能力对照](docs/与企业级能力对照.md) | 进阶 | Demo 与企业 RAG/Agent/工程能力的差距与补齐顺序 |
 

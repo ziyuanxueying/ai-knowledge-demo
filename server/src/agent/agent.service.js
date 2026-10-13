@@ -1,8 +1,7 @@
 import OpenAI from 'openai'
 import { config } from '../config/index.js'
-import { AGENT_TOOLS, executeTool } from './tools.js'
+import { AGENT_TOOLS, invokeTool } from './tools.js'
 import { retrieveHybrid, toDisplayHits } from '../rag/retrieve.js'
-import { lastKbCitations, lastKbHits } from './tools.js'
 
 /**
  * Agent 服务
@@ -12,7 +11,8 @@ import { lastKbCitations, lastKbHits } from './tools.js'
  * Agent：用户给任务 → AI 规划 → 调用工具 → 拿结果 → 继续推理 → ... → 给最终答案
  *
  * 循环步骤：
- *   1. 把 (system + 历史 + 当前任务 + 工具定义) 发给模型
+ *   0. 先让模型只输出执行计划（要调哪些工具、为什么），再进入循环
+ *   1. 把 (system + 计划 + 历史 + 当前任务 + 工具定义) 发给模型
  *   2. 模型返回两种情况：
  *      a) finish_reason === 'tool_calls'：模型要求调用工具
  *         → 执行每个工具，把结果作为 role:'tool' 消息追加进 messages
@@ -48,6 +48,7 @@ const AGENT_SYSTEM_PROMPT = `你是前端开发知识库助手"小码"，具备�
 - 调用后：若知识库命中，以知识库内容为准回答，并用来源编号 [1]、[2] 标注，编号必须和检索结果一致
 - 若知识库明确返回"未找到"，才可用自身通用知识补充，并写明"知识库未收录"。不要在没有对应编号时说内容来自知识库
 - 遇到需要查证的事实（如包大小、版本），调用 get_npm_package_info 获取真实数据，不要凭记忆编造
+- 若后面给出了执行计划，按计划调用工具；计划之外不要另起工具，除非计划中的工具失败
 - 可以连续调用多个工具，分步完成任务
 - 拿到工具结果后，综合分析再给出最终回答
 - 如果工具返回错误或未找到，诚实告知用户
@@ -62,6 +63,63 @@ const AGENT_SYSTEM_PROMPT = `你是前端开发知识库助手"小码"，具备�
 
 // 最大循环次数，防止模型陷入无限调用
 const MAX_ITERATIONS = 8
+const PLAN_TOOLS = new Set(AGENT_TOOLS.map((item) => item.function.name))
+
+function parseJsonObject(text) {
+  if (!text) return null
+  const attempts = [text]
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+  if (fenced) attempts.push(fenced[1])
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start !== -1 && end > start) attempts.push(text.slice(start, end + 1))
+  for (const item of attempts) {
+    try {
+      return JSON.parse(item)
+    } catch {
+      // 换下一种切法
+    }
+  }
+  return null
+}
+
+/**
+ * 执行前的计划：只决定工具和原因，不在这一步调用工具。
+ */
+async function draftPlan({ task, alreadyRetrieved, signal }) {
+  const catalog = AGENT_TOOLS.map((item) => `- ${item.function.name}：${item.function.description}`).join('\n')
+  const retrieved = alreadyRetrieved
+    ? '知识库已经预检索过。除非需要换一个关键词补检索，否则不要再列入 search_frontend_kb。'
+    : '若问题依赖知识库里的概念，计划里应包含 search_frontend_kb。'
+  const response = await client.chat.completions.create(
+    {
+      model: config.dashscope.model,
+      temperature: 0.1,
+      max_tokens: 400,
+      messages: [
+        {
+          role: 'system',
+          content: `你只负责规划，不回答用户。根据任务列出要调用的工具。只输出 JSON：{"steps":[{"toolName":"工具名","why":"一句话原因"}]}。
+可用工具：
+${catalog}
+${retrieved}
+toolName 必须是上面列出的名字。不需要工具时 steps 为空数组。不要输出其他文字。`,
+        },
+        { role: 'user', content: task },
+      ],
+    },
+    { signal }
+  )
+  const parsed = parseJsonObject(response.choices?.[0]?.message?.content || '')
+  const steps = Array.isArray(parsed?.steps) ? parsed.steps : []
+  return steps
+    .filter((step) => step && PLAN_TOOLS.has(step.toolName))
+    .slice(0, 4)
+    .map((step) => ({
+      toolName: step.toolName,
+      why: String(step.why || '执行该工具').slice(0, 80),
+    }))
+}
 
 /**
  * 运行 Agent
@@ -117,8 +175,37 @@ export async function* runAgent({ task, history = [], signal }) {
   ]
 
   let totalUsage = null
-  // 步骤编号：预检索若已用 step 1，模型循环从 step 2 起接着编号
-  const stepBase = ragContext ? 1 : 0
+  // 步骤编号：预检索占 step 1 时，计划接在后面，工具循环再往后排
+  let stepBase = ragContext ? 1 : 0
+  let planSteps = []
+  let planFailed = false
+  try {
+    planSteps = await draftPlan({ task, alreadyRetrieved: Boolean(ragContext), signal })
+  } catch (err) {
+    if (err.name === 'AbortError' || err.name === 'APIUserAbortError' || signal?.aborted) {
+      yield { type: 'aborted' }
+      return
+    }
+    planFailed = true
+  }
+  if (planFailed) {
+    planSteps = [{ toolName: 'reply', why: '规划未完成，按已有上下文继续' }]
+  } else if (planSteps.length === 0) {
+    planSteps = [{ toolName: 'reply', why: ragContext ? '预检索已有结果，直接回答' : '不必调用工具，直接回答' }]
+  }
+  stepBase += 1
+  yield { type: 'thinking', step: stepBase, plan: planSteps }
+
+  const executable = planSteps.filter((step) => step.toolName !== 'reply')
+  const planBody = planFailed
+    ? '规划未完成。按系统提示决定是否调用工具。'
+    : executable.length
+      ? `${executable.map((step, index) => `${index + 1}. ${step.toolName}：${step.why}`).join('\n')}\n请按此计划调用工具。计划之外不要另起工具，除非计划中的工具失败。`
+      : '不必调用工具，根据已有上下文直接回答。'
+  messages.splice(1, 0, { role: 'system', content: `## 执行计划\n${planBody}` })
+
+  // 本轮任务内连续失败的工具不再调用。下一次用户消息会重新开始。
+  const stoppedTools = new Set()
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     if (signal?.aborted) return
@@ -168,35 +255,48 @@ export async function* runAgent({ task, history = [], signal }) {
         tool_calls: message.tool_calls,
       })
 
-      // 执行每个工具，推送结果，并把结果作为 tool 消息回传
-      for (const toolCall of message.tool_calls) {
-        if (signal?.aborted) return
-        const toolName = toolCall.function.name
-        const args = safeParseArgs(toolCall.function.arguments)
-
-        const result = await executeTool(toolName, args)
-        let hits
-        if (toolName === 'search_frontend_kb') {
-          if (lastKbCitations.length > 0) {
-            yield { type: 'citations', citations: lastKbCitations.map((item) => ({ ...item })) }
+      // 同一轮的多个 tool_calls 并行执行，回填仍按原顺序对齐 tool_call_id
+      let executed
+      try {
+        executed = await Promise.all(message.tool_calls.map(async (toolCall) => {
+          if (signal?.aborted) {
+            const err = new Error('已中断')
+            err.name = 'AbortError'
+            throw err
           }
-          hits = lastKbHits.map((item) => ({ ...item }))
+          const toolName = toolCall.function.name
+          const args = safeParseArgs(toolCall.function.arguments)
+          const outcome = await invokeTool(toolName, args, {
+            signal,
+            stopped: stoppedTools.has(toolName),
+          })
+          return { toolCall, toolName, args, ...outcome }
+        }))
+      } catch (err) {
+        if (err.name === 'AbortError' || err.name === 'APIUserAbortError') {
+          yield { type: 'aborted' }
+          return
         }
+        throw err
+      }
 
+      for (const item of executed) {
+        if (item.failed && !item.stopped) stoppedTools.add(item.toolName)
+        if (item.toolName === 'search_frontend_kb' && item.citations?.length) {
+          yield { type: 'citations', citations: item.citations.map((cite) => ({ ...cite })) }
+        }
         yield {
           type: 'tool',
           step: i + 1 + stepBase,
-          toolName,
-          args,
-          result,
-          hits,
+          toolName: item.toolName,
+          args: item.args,
+          result: item.content,
+          hits: item.hits?.length ? item.hits : undefined,
         }
-
-        // 把工具结果作为 tool 角色消息回传给模型
         messages.push({
           role: 'tool',
-          tool_call_id: toolCall.id,
-          content: result,
+          tool_call_id: item.toolCall.id,
+          content: item.content,
         })
       }
 

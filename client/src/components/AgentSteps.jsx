@@ -11,6 +11,7 @@ const TOOL_LABELS = {
   search_frontend_kb: '搜索知识库',
   get_npm_package_info: '查询 npm',
   analyze_code: '分析代码',
+  reply: '直接回答',
 };
 
 function toolLabel(name) {
@@ -146,6 +147,11 @@ export default function AgentSteps({ steps }) {
                 : '生成最终回答'}
             </span>
           </div>
+          {s.plan?.some((p) => p.why) && (
+            <div className="agent-step-why">
+              {s.plan.filter((p) => p.why).map((p) => `${toolLabel(p.toolName)}：${p.why}`).join('；')}
+            </div>
+          )}
           {(s.tools || []).map((t, idx) => {
             const kbHits = t.toolName === 'search_frontend_kb' ? t.hits : null;
             return (

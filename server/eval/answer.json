@@ -1,0 +1,8 @@
+[
+  { "q": "闭包是什么", "expectTitle": "闭包" },
+  { "q": "虚拟DOM是什么", "expectTitle": "虚拟 DOM" },
+  { "q": "微任务和宏任务谁先执行", "expectTitle": "事件循环" },
+  { "q": "Tree Shaking 是什么", "expectTitle": "Tree Shaking" },
+  { "q": "今天北京天气怎么样", "expectEmpty": true },
+  { "q": "红烧肉怎么做", "expectEmpty": true }
+]

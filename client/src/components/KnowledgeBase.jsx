@@ -8,6 +8,7 @@ import {
   getKbStats,
   searchKnowledge,
   runKnowledgeEval,
+  runAnswerEval,
   regenerateKbEmbeddings,
   uploadKnowledgeBinary,
   ingestWebUrl,
@@ -149,6 +150,10 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
   const [evalLoading, setEvalLoading] = useState(false);
   const [evalError, setEvalError] = useState('');
   const [evalOpen, setEvalOpen] = useState(false);
+  const [answerReport, setAnswerReport] = useState(null);
+  const [answerLoading, setAnswerLoading] = useState(false);
+  const [answerError, setAnswerError] = useState('');
+  const [answerOpen, setAnswerOpen] = useState(false);
   const [embeddingLoading, setEmbeddingLoading] = useState(false);
   const [webUrl, setWebUrl] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
@@ -317,6 +322,19 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
       setEvalError(e.message || '检索回归失败');
     } finally {
       setEvalLoading(false);
+    }
+  };
+
+  const handleAnswerEval = async () => {
+    setAnswerLoading(true);
+    setAnswerError('');
+    try {
+      setAnswerReport(await runAnswerEval());
+      setAnswerOpen(true);
+    } catch (e) {
+      setAnswerError(e.message || '回答回归失败');
+    } finally {
+      setAnswerLoading(false);
     }
   };
 
@@ -554,6 +572,62 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
                     {' · 实际 '}
                     {item.titles.length ? item.titles.join('、') : '空'}
                   </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="kb-rag-panel kb-eval-panel">
+        <div className="kb-eval-bar">
+          <div className="kb-eval-copy">
+            <div className="kb-eval-heading">
+              <div className="kb-rag-title">回答回归</div>
+              {answerReport && (
+                <span className={`kb-eval-score${answerReport.hits === answerReport.total ? ' is-pass' : ' is-fail'}`}>
+                  通过 {answerReport.hits}/{answerReport.total}（{(answerReport.rate * 100).toFixed(1)}%）
+                </span>
+              )}
+            </div>
+            <p className="kb-eval-desc">
+              用固定问句作答，检查结论是否贴着检索到的父块，以及 [n] 是否对得上。会调用对话模型。
+            </p>
+          </div>
+          <div className="kb-eval-actions">
+            {answerReport && (
+              <button
+                type="button"
+                className="kb-rag-btn"
+                onClick={() => setAnswerOpen((open) => !open)}
+                aria-expanded={answerOpen}
+              >
+                {answerOpen ? '收起明细' : '展开明细'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="kb-rag-search-btn"
+              onClick={handleAnswerEval}
+              disabled={answerLoading}
+            >
+              {answerLoading ? '正在评测…' : '运行回答评测'}
+            </button>
+          </div>
+        </div>
+        {answerError && <div className="kb-eval-error">{answerError}</div>}
+        {answerReport && answerOpen && (
+          <div className="kb-eval-list">
+            {[...answerReport.cases].sort((a, b) => Number(a.ok) - Number(b.ok)).map((item) => (
+              <div key={item.q} className={`kb-eval-row${item.ok ? '' : ' is-miss'}`}>
+                <span className="kb-eval-mark">{item.ok ? '通过' : '未过'}</span>
+                <div className="kb-eval-body">
+                  <div className="kb-eval-q">{item.q}</div>
+                  <div className="kb-eval-detail">
+                    {item.expect}
+                    {item.failures?.length ? ` · ${item.failures.join('；')}` : ' · 忠实，引用编号正确'}
+                  </div>
+                  {item.answer ? <div className="kb-eval-answer">{item.answer}</div> : null}
                 </div>
               </div>
             ))}

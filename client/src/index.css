@@ -880,6 +880,18 @@ body {
   color: var(--text-primary);
 }
 
+.kb-eval-answer {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .kb-eval-detail {
   margin-top: 2px;
   color: var(--text-secondary);
@@ -1449,6 +1461,13 @@ body {
 
 .agent-step-plan {
   color: var(--text-primary);
+}
+
+.agent-step-why {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .agent-tool {

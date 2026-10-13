@@ -17,6 +17,7 @@ import {
 } from '../data/kbStore.js';
 import { searchCompare } from '../rag/retrieve.js';
 import { runGoldenEval } from '../rag/goldenEval.js';
+import { runAnswerEval } from '../rag/answerEval.js';
 import { enqueueJob, listJobs } from '../rag/ingest.js';
 import { assertCosConfig, buildObjectKey, deleteObject, missingCosEnv, putObject } from '../storage/cos.js';
 
@@ -55,6 +56,18 @@ router.post('/eval', async (req, res) => {
     res.json(await runGoldenEval());
   } catch (err) {
     res.status(500).json({ error: err.message || '检索回归失败' });
+  }
+});
+
+/**
+ * POST /api/knowledge/eval/answer
+ * 用固定问句生成回答，核对是否贴着父块、引用编号是否正确。会调用对话模型。
+ */
+router.post('/eval/answer', async (req, res) => {
+  try {
+    res.json(await runAnswerEval());
+  } catch (err) {
+    res.status(500).json({ error: err.message || '回答回归失败' });
   }
 });
 

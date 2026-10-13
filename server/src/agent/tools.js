@@ -14,24 +14,23 @@
  * 未配置 embedding 或向量缺失时，向量路为空，只剩关键词路。
  */
 
-/** 最近一次知识库检索的引用，供 Agent 在工具调用后推给前端 */
-export let lastKbCitations = []
-/** 同一轮检索的展示用命中（子块摘要 + 父块全文） */
-export let lastKbHits = []
-
 import { retrieveHybrid, toDisplayHits } from '../rag/retrieve.js'
+
+/** 所有工具共用的超时。检索还要算上向量和可选 Rerank，所以比 npm 内部的 8 秒更宽。 */
+export const TOOL_TIMEOUT_MS = 15000
 
 /**
  * 工具 1：搜索前端知识库（语义检索 / RAG）
+ * 引用随本次调用返回，避免同一轮并行检索互相覆盖。
  */
 async function searchFrontendKb(keyword) {
-  lastKbCitations = []
-  lastKbHits = []
-  if (!keyword) return '错误：keyword 不能为空'
+  if (!keyword) return { content: '错误：keyword 不能为空', citations: [], hits: [] }
   const found = await retrieveHybrid(keyword, { topK: 5, threshold: 0.3, rewrite: false })
-  lastKbCitations = found.citations
-  lastKbHits = toDisplayHits(found.hits)
-  return found.text
+  return {
+    content: found.text,
+    citations: found.citations || [],
+    hits: toDisplayHits(found.hits),
+  }
 }
 
 /**
@@ -165,20 +164,110 @@ export const AGENT_TOOLS = [
   },
 ]
 
+function isToolFailure(text) {
+  const value = String(text || '')
+  return value.startsWith('错误：')
+    || value.startsWith('工具执行出错')
+    || value.startsWith('工具执行超时')
+    || value.startsWith('查询失败')
+    || value.startsWith('查询 npm 包信息失败')
+}
+
+function withTimeout(work, ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      const err = new Error('已中断')
+      err.name = 'AbortError'
+      reject(err)
+      return
+    }
+    let settled = false
+    const timer = setTimeout(() => {
+      const err = new Error(`超时（${ms}ms）`)
+      err.name = 'TimeoutError'
+      finish(reject, err)
+    }, ms)
+    const onAbort = () => {
+      const err = new Error('已中断')
+      err.name = 'AbortError'
+      finish(reject, err)
+    }
+    const finish = (fn, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      fn(value)
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    Promise.resolve()
+      .then(work)
+      .then((value) => finish(resolve, value), (err) => finish(reject, err))
+  })
+}
+
+async function runHandler(toolName, args) {
+  const handler = TOOL_HANDLERS[toolName]
+  if (!handler) {
+    return { content: `错误：未知工具 "${toolName}"`, citations: [], hits: [] }
+  }
+  try {
+    const value = await handler(args)
+    if (value && typeof value === 'object' && typeof value.content === 'string') {
+      return {
+        content: value.content,
+        citations: Array.isArray(value.citations) ? value.citations : [],
+        hits: Array.isArray(value.hits) ? value.hits : [],
+      }
+    }
+    return { content: String(value ?? ''), citations: [], hits: [] }
+  } catch (err) {
+    return { content: `工具执行出错：${err.message}`, citations: [], hits: [] }
+  }
+}
+
 /**
- * 执行工具调用
+ * 执行一次工具调用。超时后重试一次；两次都失败则 failed 为 true。
+ * 调用方据此在本轮任务里停用该工具。
+ */
+export async function invokeTool(toolName, args = {}, { signal, stopped = false } = {}) {
+  if (stopped) {
+    return {
+      content: `已停止调用 ${toolName}：本轮连续失败，不再重试。`,
+      citations: [],
+      hits: [],
+      failed: true,
+      stopped: true,
+    }
+  }
+
+  let last = { content: '工具执行出错：未知原因', citations: [], hits: [] }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const outcome = await withTimeout(() => runHandler(toolName, args), TOOL_TIMEOUT_MS, signal)
+      if (!isToolFailure(outcome.content)) {
+        return { ...outcome, failed: false, stopped: false }
+      }
+      last = outcome
+    } catch (err) {
+      if (err.name === 'AbortError') throw err
+      last = {
+        content: err.name === 'TimeoutError' ? `工具执行超时：${err.message}` : `工具执行出错：${err.message}`,
+        citations: [],
+        hits: [],
+      }
+    }
+  }
+  return { ...last, failed: true, stopped: false }
+}
+
+/**
+ * 执行工具调用，只返回给模型看的文本。
  * @param {string} toolName - 工具名
  * @param {object} args - 解析后的参数对象
  * @returns {Promise<string>} 工具执行结果（字符串）
  */
 export async function executeTool(toolName, args = {}) {
-  const handler = TOOL_HANDLERS[toolName]
-  if (!handler) {
-    return `错误：未知工具 "${toolName}"`
-  }
-  try {
-    return await handler(args)
-  } catch (err) {
-    return `工具执行出错：${err.message}`
-  }
+  const outcome = await invokeTool(toolName, args)
+  return outcome.content
 }

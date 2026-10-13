@@ -446,6 +446,13 @@ export async function runKnowledgeEval() {
   return data
 }
 
+export async function runAnswerEval() {
+  const res = await fetch(`${API_BASE}/knowledge/eval/answer`, { method: 'POST' })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || '回答回归失败')
+  return data
+}
+
 export async function searchKnowledge(q, mode = 'compare') {
   const url = `${API_BASE}/knowledge/search?q=${encodeURIComponent(q)}&mode=${mode}`
   const res = await fetch(url)
