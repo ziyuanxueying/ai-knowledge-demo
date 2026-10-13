@@ -30,14 +30,14 @@
 **产品形态**：
 
 1. **对话模式**（`/api/chat`）：多轮问答，SSE；可选摘要压缩、参数滑块、messages 预览。
-2. **Agent 模式**（`/api/agent`）：预检索 + Function Calling 循环，前端展示工具步骤。
+2. **Agent 模式**（`/api/agent`）：与对话相同的摘要压缩，再预检索 + Function Calling 循环。前端展示工具步骤，也能看到发给模型的 messages。
 3. **知识库管理**（`/api/knowledge`）：CRUD + 向量化 + 关键词/语义对比。
 4. **A/B 实验室**（`/api/compare`）：两套配置并行生成，可选 LLM 裁判；不写会话。
 5. **Prompt 实验室**（`/api/prompts`）：在线改人设，写入 `prompts.json`，下轮对话生效。
 
 **数据流（以 Agent 为例）**：
 
-1. 用户输入任务（如"对比 react 和 vue 的体积"）
+1. 用户输入任务（如"查 vite 和 webpack 的最新版本、依赖数和体积"）
 2. 前端 POST `/api/agent`，建立 SSE 连接
 3. 后端对非问候任务先做 **pgvector 语义预检索**，命中则注入 system，并推送检索步骤
 4. 再组装 messages + tools，调用通义千问
@@ -409,7 +409,7 @@ session = {
 
 - 历史不足 6 条：`earlier` 为空数组，不触发摘要，等同滑动窗口
 - 摘要调用失败：`catch` 兜底，沿用旧 summary 或退化为滑动窗口，不阻塞主流程
-- Agent 模式：暂未套用摘要，仍带全量历史（涉及 tool 角色消息，需要单独设计）
+- Agent 模式：和对话同一套规则。最近 6 条 user/assistant 原文照发，更早的历史每多 2 条压进 `sessions.summary`。本轮循环里的 `tool` 消息不进摘要。摘要失败则退回最近 10 条原文，不挡住回答。发给模型的数组在 Agent 模式的消息预览里也能看到。
 
 ### 6. 进阶：升级到 Memory RAG
 
@@ -473,14 +473,14 @@ content.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`)
 模型每次请求真正看到的 messages 数组，是后端**运行时拼装**出来的：
 
 ```
-system（人设 prompt）
-+ system（长对话摘要，如有）          ← 第五章的摘要策略
+system（人设 prompt，Agent 命中检索时父块也写在这里）
++ system（执行计划，仅 Agent）
++ system（早期对话摘要，如有）          ← 第五章的摘要策略
 + 最近 6 条历史原文（user/assistant）
-+ RAG 检索到的知识（Agent 模式）       ← 第四章的 RAG
 + 当前用户问题
 ```
 
-这些拼装逻辑分布在多个模块里，不抓出来看就是黑盒。方案 B 在后端**调用模型之前**，把最终 messages 通过 SSE 推给前端：
+对话在调用模型前推送这份数组。Agent 在执行计划写入后、工具循环前推送，本轮 `tool` 消息还不在里面。方案 B 用 SSE 把最终 messages 推给前端：
 
 ```javascript
 // chat.js：session 事件之后、streamChat 之前
@@ -703,12 +703,12 @@ variant_done(0) → variant_done(1) → judge_start → judge_done
 
 ### 实验 7：观察 Agent 思考过程
 
-切到 Agent 模式，输入"查一下 react 和 vue 两个 npm 包的版本和依赖数，对比哪个更轻量"，
+切到 Agent 模式，点欢迎页的「查 vite 和 webpack 的最新版本、依赖数和体积」，
 
 观察 AI 回复上方的「🤖 Agent 执行步骤」面板：
 
-- 第 1 步：调用 `get_npm_package_info({packageName:"react"})` → 真实返回版本/依赖数
-- 第 2 步：调用 `get_npm_package_info({packageName:"vue"})` → 真实返回
+- 第 1 步：调用 `get_npm_package_info({packageName:"vite"})` → 真实返回版本、依赖数和体积
+- 第 2 步：调用 `get_npm_package_info({packageName:"webpack"})` → 真实返回同样三项
 - 最终：模型综合两次工具结果给出对比答案
 
 ### 实验 8：自定义工具
@@ -796,7 +796,7 @@ variant_done(0) → variant_done(1) → judge_start → judge_done
 
 再新开一轮，问「react 这个 npm 包的最新版本是多少」。概念题仍会先检索知识库。其后有一步「查询 npm」，只带原因、还没有参数和结果；再下一步才真正调用 `get_npm_package_info`，结果里是 registry 上的版本。最终回答应标明据 npm registry。
 
-同一轮如果模型一次返回多个 `tool_calls`（例如同时查 react 和 vue），它们会出现在同一步里。分成两轮各查一个时，就看不到并行。
+同一轮如果模型一次返回多个 `tool_calls`（例如同时查 vite 和 webpack），它们会出现在同一步里。分成两轮各查一个时，就看不到并行。
 
 ---
 
@@ -805,7 +805,7 @@ variant_done(0) → variant_done(1) → judge_start → judge_done
 学完本项目后，可以探索：
 
 1. **RAG 进阶**：已有父子切块、混合检索、可选 Rerank、检索 Hit@3，以及回答忠实 / 引用编号回归（`npm run eval:answer`）。再往下是真实 BM25、评测进 CI、坏例回流
-2. **上下文管理**：本项目第五章已实现滑窗 + 摘要压缩的基础版；进阶是接 tokenizer（如 tiktoken）实时精确统计 token，动态决定何时触发摘要
+2. **上下文管理**：对话和 Agent 都是最近 6 条原文 + 早期摘要；Agent 摘要失败时退回最近 10 条。进阶是接 tokenizer（如 tiktoken）实时精确统计 token，或把历史向量化后按当前问题召回（Memory RAG）
 3. **多模态**：让 AI 看图片、听语音（通义千问 VL 模型）
 4. **ReAct 与规划**：工具循环已是 ReAct，并在循环前先输出执行计划；同一轮工具并行，超时后重试一次。再往下是多 Agent
 5. **多 Agent 协作**：多个 Agent 分工（如一个负责搜索、一个负责总结）

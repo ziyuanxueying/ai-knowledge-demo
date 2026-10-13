@@ -5,10 +5,10 @@ import { getQuickQuestions } from '../utils/api.js';
  * Agent 模式的示例任务（会触发工具调用，便于体验差异）
  */
 const AGENT_TASKS = [
-  { id: 'a1', text: '查一下 react 和 vue 两个 npm 包的版本和依赖数，对比哪个更轻量' },
-  { id: 'a2', text: '解释一下虚拟 DOM 是什么' },
-  { id: 'a3', text: '分析这段代码：const x = () => <div onClick={fn}>{count}</div>' },
-  { id: 'a4', text: '事件循环和宏任务、微任务的关系' },
+  { id: 'a1', text: '查 vite 和 webpack 的最新版本、依赖数和体积' },
+  { id: 'a2', text: '闭包为什么会造成内存泄漏？' },
+  { id: 'a3', text: '分析这段代码：function Box() { const [n, setN] = useState(0); return <button onClick={async () => { await fetch("/api"); setN(n + 1) }}>{n}</button> }' },
+  { id: 'a4', text: 'Tree Shaking 是怎么消除未使用代码的？' },
 ];
 
 /**

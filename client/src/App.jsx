@@ -211,8 +211,8 @@ export default function App() {
               />
             )}
 
-            {!isAgent && chat.previewMessages && (
-              <MessagePreview data={chat.previewMessages} />
+            {(isAgent ? agent.previewMessages : chat.previewMessages) && (
+              <MessagePreview data={isAgent ? agent.previewMessages : chat.previewMessages} />
             )}
 
             <ChatWindow

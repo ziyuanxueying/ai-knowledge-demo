@@ -26,7 +26,7 @@ ai-knowledge-demo/
 - 📚 **知识库管理**：CRUD 知识条目，保存时自动向量化，Agent 立即可语义检索
 - 🔍 **RAG 检索增强**：基于 Embedding 向量 + 余弦相似度的语义检索，附关键词 vs 语义检索对比面板
 - 🧪 **Prompt 实验室**：在线编辑 System Prompt（支持变量插值、多角色切换），保存即时生效无需重启
-- 👁 **消息预览面板**：可视化最终发给模型的 messages 数组，含每条消息角色/字数/token 估算，调试黑盒变白盒
+- 👁 **消息预览面板**：对话和 Agent 都能看到最终发给模型的 messages，含每条消息角色、字数和 token 估算
 - 📡 **流式输出**：SSE 协议，逐字返回 AI 回复
 - 📝 **Markdown 渲染**：支持代码高亮、表格、列表等富文本
 - 💾 **对话历史保存**：PostgreSQL 持久化会话与消息
@@ -101,7 +101,7 @@ npm run dev
 | 模式 | 入口 | 实现要点 |
 |------|------|----------|
 | 对话 | `POST /api/chat` | 读会话 → 必要时摘要压缩 → 拼 messages → SSE 推预览再流式生成 → 写入 `messages` |
-| Agent | `POST /api/agent` | 非问候先语义预检索注入 system → Function Calling 循环（最多 8 轮）→ 写入历史（含 toolSteps） |
+| Agent | `POST /api/agent` | 与对话相同的摘要压缩 → 非问候先预检索 → 先规划再 Function Calling（最多 8 轮）→ SSE 推 messages 预览 → 写入历史（含 toolSteps） |
 | 知识库 / RAG | `/api/knowledge` | 条目存 Postgres；`embedding vector(1024)`；检索用 pgvector `<=>` 余弦距离 + HNSW |
 | A/B | `POST /api/compare` | 不读写会话、不注入 RAG；两路配置并行 SSE；可选低温裁判 JSON 打分 |
 
@@ -127,7 +127,7 @@ npm run dev
 | 大模型 API 调用 | 如何调用通义千问 Chat Completions | `server/src/services/ai.service.js` |
 | System Prompt | 通过系统提示词定义 AI 角色 | `server/src/prompts/system.js` |
 | Prompt 在线编辑 | Prompt 存 JSON 动态加载 + 变量插值，改完即时生效 | `server/src/data/promptStore.js` |
-| 消息预览与 Token 估算 | SSE 推送最终 messages，黑盒变白盒 | `client/src/components/MessagePreview.jsx` |
+| 消息预览与 Token 估算 | 对话和 Agent 都用 SSE 推送最终 messages | `client/src/components/MessagePreview.jsx` |
 | 流式输出 (SSE) | Server-Sent Events 实现逐字输出 | `server/src/routes/chat.js` |
 | Function Calling | 让 AI 调用工具函数 | `server/src/agent/tools.js` |
 | Agent 编排 | AI 自主规划任务步骤的循环 | `server/src/agent/agent.service.js` |
@@ -135,7 +135,7 @@ npm run dev
 | RAG 语义检索 | pgvector 余弦距离 + Top-K + 阈值过滤 | `server/src/data/kbStore.js` |
 | 两种 RAG 策略 | Agentic RAG vs 预检索注入的取舍 | `server/src/agent/agent.service.js` |
 | 多轮对话上下文 | 维护 messages 数组实现上下文 | `server/src/services/ai.service.js` |
-| 长对话摘要压缩 | 历史超阈值自动压成摘要，避免 token 爆涨 | `server/src/routes/chat.js` |
+| 长对话摘要压缩 | 对话和 Agent 都把早期历史压成摘要；Agent 失败时退回最近 10 条 | `server/src/routes/chat.js`、`server/src/routes/agent.js` |
 | Token 与计费 | 理解 Token 概念和用量统计 | `server/src/routes/chat.js` |
 | 温度参数 | temperature 控制回答随机性 | `server/src/config/index.js` |
 

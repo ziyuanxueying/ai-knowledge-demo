@@ -216,11 +216,11 @@ export async function getQuickQuestions() {
  * 其余 content / done / aborted 与普通聊天一致。
  *
  * @param {object} params - { task, sessionId }
- * @param {object} handlers - { onSession, onThinking, onTool, onChunk, onUsage, onDone, onError, signal }
+ * @param {object} handlers - { onSession, onMessages, onThinking, onTool, onChunk, onUsage, onDone, onError, signal }
  */
 export async function sendAgentTask(
   { task, sessionId },
-  { onSession, onThinking, onTool, onChunk, onCitations, onUsage, onDone, onError, signal }
+  { onSession, onMessages, onThinking, onTool, onChunk, onCitations, onUsage, onDone, onError, signal }
 ) {
   let response
   try {
@@ -269,6 +269,9 @@ export async function sendAgentTask(
           switch (parsed.type) {
             case 'session':
               onSession?.(parsed.sessionId)
+              break
+            case 'messages':
+              onMessages?.(parsed)
               break
             case 'thinking':
               onThinking?.(parsed)

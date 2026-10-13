@@ -39,8 +39,8 @@ export function getSystemPrompt(scenario = 'frontend_dev') {
  * 快捷问题列表（展示在前端，用户可点击快速提问）
  */
 export const QUICK_QUESTIONS = [
-  { id: 'q1', text: 'React 中 useEffect 和 useLayoutEffect 有什么区别？' },
-  { id: 'q2', text: '如何用 CSS 实现一个垂直水平居中的布局？' },
-  { id: 'q3', text: 'Vue 3 的 Composition API 相比 Options API 有什么优势？' },
-  { id: 'q4', text: '前端如何优化首屏加载性能？' },
+  { id: 'q1', text: '箭头函数和普通函数里，this 分别指向谁？' },
+  { id: 'q2', text: '输入框每打一个字都发请求，防抖该怎么写？' },
+  { id: 'q3', text: '很多子元素都要点击，事件绑在每个子元素上还是绑在父级？' },
+  { id: 'q4', text: '状态只在父子组件之间用，该用 props 还是 Context？' },
 ];

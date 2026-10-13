@@ -15,6 +15,8 @@ export function useAgent() {
   const [currentSessionId, setCurrentSessionId] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  // 后端在调用模型前推送的 messages（人设、计划、早期摘要、最近原文、当前任务）
+  const [previewMessages, setPreviewMessages] = useState(null)
   const abortRef = useRef(null)
 
   /** 新建任务 */
@@ -24,6 +26,7 @@ export function useAgent() {
 
       setError(null)
       setLoading(true)
+      setPreviewMessages(null)
 
       // 用户消息
       const userMsg = {
@@ -54,6 +57,9 @@ export function useAgent() {
           signal: controller.signal,
           onSession: sessionId => {
             setCurrentSessionId(sessionId)
+          },
+          onMessages: data => {
+            setPreviewMessages(data)
           },
           onThinking: ({ step, plan }) => {
             // 追加一个新步骤
@@ -164,11 +170,13 @@ export function useAgent() {
   const newChat = useCallback(() => {
     setCurrentSessionId(null)
     setMessages([])
+    setPreviewMessages(null)
     setError(null)
   }, [])
 
   return {
     messages,
+    previewMessages,
     currentSessionId,
     loading,
     error,

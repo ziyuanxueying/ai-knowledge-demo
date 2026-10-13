@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import { config } from '../config/index.js'
+import { estimateTokens } from '../services/ai.service.js'
 import { AGENT_TOOLS, invokeTool } from './tools.js'
 import { retrieveHybrid, toDisplayHits } from '../rag/retrieve.js'
 
@@ -12,7 +13,7 @@ import { retrieveHybrid, toDisplayHits } from '../rag/retrieve.js'
  *
  * 循环步骤：
  *   0. 先让模型只输出执行计划（要调哪些工具、为什么），再进入循环
- *   1. 把 (system + 计划 + 历史 + 当前任务 + 工具定义) 发给模型
+ *   1. 把 (system + 计划 + 早期摘要 + 最近原文 + 当前任务 + 工具定义) 发给模型
  *   2. 模型返回两种情况：
  *      a) finish_reason === 'tool_calls'：模型要求调用工具
  *         → 执行每个工具，把结果作为 role:'tool' 消息追加进 messages
@@ -125,11 +126,12 @@ toolName 必须是上面列出的名字。不需要工具时 steps 为空数组�
  * 运行 Agent
  * @param {object} params
  * @param {string} params.task - 用户的任务
- * @param {Array} params.history - 历史消息 [{role:'user'|'assistant', content}]
+ * @param {Array} params.history - 最近原文 [{role:'user'|'assistant', content}]，不含本轮工具消息
+ * @param {string} params.summary - 早期对话摘要；为空则不注入
  * @param {AbortSignal} params.signal - 中断信号
  * @returns {AsyncGenerator} 事件流
  */
-export async function* runAgent({ task, history = [], signal }) {
+export async function* runAgent({ task, history = [], summary = '', signal }) {
   // 【AI 学习要点 - RAG 两种实现策略】：
   //   策略 A（Agentic RAG）：让模型自己决定是否调用 search_frontend_kb 检索
   //     → 依赖模型的工具调用可靠性，小模型（qwen-turbo）常"自以为知道"不调，甚至编造"据知识库"
@@ -162,12 +164,17 @@ export async function* runAgent({ task, history = [], signal }) {
     }
   }
 
-  // 组装初始 messages：system + RAG 上下文 + 历史 + 当前任务
+  // 组装初始 messages：system + 早期摘要 + 最近原文 + 当前任务
+  // 执行计划在规划完成后插到人设后面。本轮 tool 消息只在循环里追加，不进摘要。
   const systemContent = ragContext
     ? `${AGENT_SYSTEM_PROMPT}\n\n## 已检索到的知识库内容（请据此回答，用来源编号 [n] 标注）\n${ragContext}`
     : AGENT_SYSTEM_PROMPT
+  const summaryMessages = summary
+    ? [{ role: 'system', content: `## 早期对话摘要（请据此理解上下文）\n${summary}` }]
+    : []
   const messages = [
     { role: 'system', content: systemContent },
+    ...summaryMessages,
     ...history
       .filter(m => m.role === 'user' || m.role === 'assistant')
       .map(m => ({ role: m.role, content: m.content })),
@@ -203,6 +210,19 @@ export async function* runAgent({ task, history = [], signal }) {
       ? `${executable.map((step, index) => `${index + 1}. ${step.toolName}：${step.why}`).join('\n')}\n请按此计划调用工具。计划之外不要另起工具，除非计划中的工具失败。`
       : '不必调用工具，根据已有上下文直接回答。'
   messages.splice(1, 0, { role: 'system', content: `## 执行计划\n${planBody}` })
+
+  const previewMessages = messages.map((m) => ({
+    role: m.role,
+    content: m.content || '',
+    chars: (m.content || '').length,
+    tokens: estimateTokens(m.content || ''),
+  }))
+  yield {
+    type: 'messages',
+    messages: previewMessages,
+    totalTokens: previewMessages.reduce((sum, m) => sum + m.tokens, 0),
+    summary: summary || null,
+  }
 
   // 本轮任务内连续失败的工具不再调用。下一次用户消息会重新开始。
   const stoppedTools = new Set()

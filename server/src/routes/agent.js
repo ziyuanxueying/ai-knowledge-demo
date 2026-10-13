@@ -1,6 +1,12 @@
 import { Router } from 'express';
 import { runAgent } from '../agent/agent.service.js';
-import { createSession, getSession, appendMessage } from '../data/store.js';
+import { summarizeHistory } from '../services/ai.service.js';
+import { createSession, getSession, appendMessage, updateSessionSummary } from '../data/store.js';
+
+// 与对话模式相同：最近 6 条留原文，更早的每多 2 条才摘要一次。
+// 摘要失败时退回原来的最近 10 条，不挡住这一轮回答。
+const MAX_RECENT_MESSAGES = 6;
+const FALLBACK_HISTORY_MESSAGES = 10;
 
 const router = Router();
 
@@ -13,6 +19,7 @@ const router = Router();
  *
  * SSE 事件类型（前端据此渲染 Agent 的"思考过程"）：
  *   { type: 'session', sessionId }
+ *   { type: 'messages', messages, totalTokens, summary }  // 实际发给模型的 messages
  *   { type: 'thinking', step, plan: [{toolName, args}] }   // Agent 计划调用哪些工具
  *   { type: 'tool', step, toolName, args, result }          // 单个工具执行结果
  *   { type: 'citations', citations }                        // 检索到来源（父块 + 子块高亮位置）
@@ -49,6 +56,32 @@ router.post('/', async (req, res) => {
       session = await createSession('Agent 任务');
     }
 
+    // 当前任务还没写入，摘要只覆盖更早的 user/assistant 正文。
+    // 工具结果存在 toolSteps 里，不进这段历史，也就不会被压进摘要。
+    const allHistory = session.messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({ role: m.role, content: m.content || '' }));
+    const earlier = allHistory.slice(0, -MAX_RECENT_MESSAGES);
+    const recentHistory = allHistory.slice(-MAX_RECENT_MESSAGES);
+    let summary = session.summary || '';
+    let history = recentHistory;
+    let summaryFailed = false;
+    if (earlier.length - (session.summaryUpTo || 0) >= 2) {
+      try {
+        const newSummary = await summarizeHistory(earlier, summary);
+        const updated = await updateSessionSummary(session.id, newSummary, earlier.length);
+        summary = updated?.summary || newSummary;
+        console.log(`[Agent 摘要] 触发: 压缩前 ${earlier.length} 条历史 -> ${summary.length} 字摘要`);
+      } catch (err) {
+        summaryFailed = true;
+        console.error('生成 Agent 对话摘要失败:', err.message);
+      }
+    }
+    if (summaryFailed) {
+      history = allHistory.slice(-FALLBACK_HISTORY_MESSAGES);
+      summary = '';
+    }
+
     // 把用户任务存入历史
     await appendMessage(session.id, { role: 'user', content: task });
 
@@ -60,11 +93,6 @@ router.post('/', async (req, res) => {
 
     // 先发送 sessionId
     res.write(`data: ${JSON.stringify({ type: 'session', sessionId: session.id })}\n\n`);
-
-    // 构造历史消息（用于多轮上下文）
-    const history = session.messages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(-10); // 只保留最近 10 条，控制 token
 
     const controller = new AbortController();
     // 注意：不能用 req.on('close')，它会在请求体读完后立即触发，导致提前中断。
@@ -79,9 +107,12 @@ router.post('/', async (req, res) => {
     const steps = []; // 记录工具调用步骤，存入历史
 
     try {
-      const stream = runAgent({ task, history, signal: controller.signal });
+      const stream = runAgent({ task, history, summary, signal: controller.signal });
       for await (const event of stream) {
         switch (event.type) {
+          case 'messages':
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+            break;
           case 'thinking':
             steps.push({ step: event.step, plan: event.plan, tools: [] });
             res.write(`data: ${JSON.stringify(event)}\n\n`);
