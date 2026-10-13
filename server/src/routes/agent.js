@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { runAgent } from '../agent/agent.service.js';
 import { summarizeHistory } from '../services/ai.service.js';
 import { createSession, getSession, appendMessage, updateSessionSummary } from '../data/store.js';
+import { prepareMemoryContext, rememberTurn, latestTurn } from '../memory/memory.js';
 
 // 与对话模式相同：最近 6 条留原文，更早的每多 2 条才摘要一次。
 // 摘要失败时退回原来的最近 10 条，不挡住这一轮回答。
@@ -19,7 +20,7 @@ const router = Router();
  *
  * SSE 事件类型（前端据此渲染 Agent 的"思考过程"）：
  *   { type: 'session', sessionId }
- *   { type: 'messages', messages, totalTokens, summary }  // 实际发给模型的 messages
+ *   { type: 'messages', messages, totalTokens, summary, memories }  // 实际发给模型的 messages
  *   { type: 'thinking', step, plan: [{toolName, args}] }   // Agent 计划调用哪些工具
  *   { type: 'tool', step, toolName, args, result }          // 单个工具执行结果
  *   { type: 'citations', citations }                        // 检索到来源（父块 + 子块高亮位置）
@@ -58,11 +59,12 @@ router.post('/', async (req, res) => {
 
     // 当前任务还没写入，摘要只覆盖更早的 user/assistant 正文。
     // 工具结果存在 toolSteps 里，不进这段历史，也就不会被压进摘要。
-    const allHistory = session.messages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
+    const dialogue = session.messages.filter((m) => m.role === 'user' || m.role === 'assistant');
+    const earlier = dialogue
+      .slice(0, -MAX_RECENT_MESSAGES)
       .map((m) => ({ role: m.role, content: m.content || '' }));
-    const earlier = allHistory.slice(0, -MAX_RECENT_MESSAGES);
-    const recentHistory = allHistory.slice(-MAX_RECENT_MESSAGES);
+    const recentDialogue = dialogue.slice(-MAX_RECENT_MESSAGES);
+    const recentHistory = recentDialogue.map((m) => ({ role: m.role, content: m.content || '' }));
     let summary = session.summary || '';
     let history = recentHistory;
     let summaryFailed = false;
@@ -78,9 +80,19 @@ router.post('/', async (req, res) => {
       }
     }
     if (summaryFailed) {
-      history = allHistory.slice(-FALLBACK_HISTORY_MESSAGES);
+      history = dialogue
+        .slice(-FALLBACK_HISTORY_MESSAGES)
+        .map((m) => ({ role: m.role, content: m.content || '' }));
       summary = '';
     }
+    const excludeMessageIds = (
+      summaryFailed ? dialogue.slice(-FALLBACK_HISTORY_MESSAGES) : recentDialogue
+    ).map((m) => m.id);
+    const memory = await prepareMemoryContext({
+      query: task,
+      sessionId: session.id,
+      excludeMessageIds,
+    });
 
     // 把用户任务存入历史
     await appendMessage(session.id, { role: 'user', content: task });
@@ -107,7 +119,14 @@ router.post('/', async (req, res) => {
     const steps = []; // 记录工具调用步骤，存入历史
 
     try {
-      const stream = runAgent({ task, history, summary, signal: controller.signal });
+      const stream = runAgent({
+        task,
+        history,
+        summary,
+        memory: memory.text,
+        memories: memory.items,
+        signal: controller.signal,
+      });
       for await (const event of stream) {
         switch (event.type) {
           case 'messages':
@@ -162,13 +181,23 @@ router.post('/', async (req, res) => {
     }
 
     // 把 Agent 的最终回复存入历史（含工具步骤记录，便于回看）
-    await appendMessage(session.id, {
+    const saved = await appendMessage(session.id, {
       role: 'assistant',
       content: fullContent,
       usage,
       toolSteps: steps.length > 0 ? steps : undefined,
       citations: citations || undefined,
     });
+    const turn = latestTurn(saved?.messages);
+    if (turn) {
+      await rememberTurn({
+        sessionId: session.id,
+        userMessageId: turn.user.id,
+        assistantMessageId: turn.assistant.id,
+        userContent: turn.user.content,
+        assistantContent: turn.assistant.content,
+      });
+    }
 
     res.write(`data: ${JSON.stringify({ type: 'done', usage })}\n\n`);
     res.write('data: [DONE]\n\n');

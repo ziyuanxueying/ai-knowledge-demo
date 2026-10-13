@@ -7,6 +7,17 @@ const ROLE_LABELS = {
   tool: '工具',
 };
 
+function previewBadge(message) {
+  const content = String(message.content || '');
+  if (message.role === 'system' && content.startsWith('## 按当前问题召回的记忆')) {
+    return { label: '记忆', roleClass: 'memory' };
+  }
+  if (message.role === 'system' && content.startsWith('## 早期对话摘要')) {
+    return { label: '摘要', roleClass: 'summary' };
+  }
+  return { label: ROLE_LABELS[message.role] || message.role, roleClass: message.role };
+}
+
 function truncate(s, n = 300) {
   if (!s) return '';
   return s.length > n ? `${s.slice(0, n)}…（共 ${s.length} 字）` : s;
@@ -31,7 +42,9 @@ export default function MessagePreview({ data }) {
 
   if (!data) return null;
 
-  const { messages = [], totalTokens = 0, summary = null } = data;
+  const { messages = [], totalTokens = 0, summary = null, memories = [] } = data;
+  const factCount = memories.filter((item) => item.kind === 'fact').length;
+  const turnCount = memories.length - factCount;
 
   return (
     <div className={`msg-preview ${expanded ? 'is-open' : ''}`}>
@@ -74,16 +87,28 @@ export default function MessagePreview({ data }) {
             </span>
           </div>
         )}
+        {memories.length > 0 && (
+          <div className="msg-preview-memory">
+            <span className="role-badge role-memory">记忆</span>
+            <span className="msg-preview-memory-text">
+              已按当前问题召回 {memories.length} 条
+              {factCount > 0 ? `，其中长期记忆 ${factCount} 条` : ''}
+              {turnCount > 0 ? `，历史原文 ${turnCount} 条` : ''}
+            </span>
+          </div>
+        )}
 
         <ul className="msg-preview-list">
-          {messages.map((m, i) => (
+          {messages.map((m, i) => {
+            const badge = previewBadge(m);
+            return (
             <li
               key={i}
-              className={`msg-preview-item role-${m.role}`}
+              className={`msg-preview-item role-${badge.roleClass}`}
             >
               <div className="msg-preview-meta">
-                <span className={`role-badge role-${m.role}`}>
-                  {ROLE_LABELS[m.role] || m.role}
+                <span className={`role-badge role-${badge.roleClass}`}>
+                  {badge.label}
                 </span>
                 <span className="msg-preview-index">#{i + 1}</span>
                 <span className="msg-preview-stats">
@@ -92,7 +117,8 @@ export default function MessagePreview({ data }) {
               </div>
               <pre className="msg-preview-content">{truncate(m.content)}</pre>
             </li>
-          ))}
+            );
+          })}
         </ul>
 
         <div className="msg-preview-total">

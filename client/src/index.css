@@ -1858,6 +1858,22 @@ body {
   line-height: 1.5;
 }
 
+.msg-preview-memory {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.msg-preview-memory-text {
+  color: #3730a3;
+  line-height: 1.5;
+}
+
 /* ---------- 消息列表（<ul>） ---------- */
 .msg-preview-list {
   list-style: none;
@@ -1917,6 +1933,12 @@ body {
   background: rgba(255, 200, 0, 0.18);
   color: #8a6400;
   border-color: rgba(255, 200, 0, 0.35);
+}
+
+.role-badge.role-memory {
+  background: rgba(79, 70, 229, 0.14);
+  color: #4338ca;
+  border-color: rgba(79, 70, 229, 0.28);
 }
 
 .role-badge.role-user {

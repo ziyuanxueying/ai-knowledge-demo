@@ -119,6 +119,29 @@ export async function initDB() {
   );
   await pool.query('ALTER TABLE messages ADD COLUMN IF NOT EXISTS citations TEXT');
 
+  // Memory RAG：回合原文（kind=turn，随会话删除）和跨会话事实（kind=fact，sessionId 为空）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS memories (
+      id                   TEXT PRIMARY KEY,
+      "sessionId"          TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+      "sourceSessionId"    TEXT,
+      kind                 TEXT NOT NULL,
+      content              TEXT NOT NULL,
+      embedding            vector(${VECTOR_DIM}),
+      embedding_model      TEXT,
+      "userMessageId"      TEXT,
+      "assistantMessageId" TEXT,
+      "createdAt"          TEXT NOT NULL
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_memories_session ON memories("sessionId")');
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_turn_user
+     ON memories ("userMessageId")
+     WHERE kind = 'turn' AND "userMessageId" IS NOT NULL`
+  );
+  await ensureEmbeddingColumn('memories', 'idx_memories_embedding');
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kb_entries (
       id          TEXT PRIMARY KEY,
@@ -194,37 +217,41 @@ export async function initDB() {
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_kb_chunks_entry ON kb_chunks("entryId")');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_kb_chunks_parent ON kb_chunks("parentId")');
-  await ensureChunkEmbeddingDim();
+  await ensureEmbeddingColumn('kb_chunks', 'idx_kb_chunks_embedding');
 
   await migrateFromJSON();
 }
 
 /**
- * pgvector 的 vector(N) 不能原地改维度。和 EMBEDDING_DIM 不一致时丢掉子块向量列再重建。
+ * pgvector 的 vector(N) 不能原地改维度。和 EMBEDDING_DIM 不一致时丢掉该列再重建。
+ * table / indexName 只来自本文件的常量，不接受外部输入。
  */
-async function ensureChunkEmbeddingDim() {
-  const res = await pool.query(`
+async function ensureEmbeddingColumn(table, indexName) {
+  const res = await pool.query(
+    `
     SELECT format_type(a.atttypid, a.atttypmod) AS label
     FROM pg_attribute a
     JOIN pg_class c ON c.oid = a.attrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public'
-      AND c.relname = 'kb_chunks'
+      AND c.relname = $1
       AND a.attname = 'embedding'
       AND NOT a.attisdropped
-  `);
+  `,
+    [table]
+  );
   const label = res.rows[0]?.label || '';
   const match = /vector\((\d+)\)/.exec(label);
   const dim = match ? Number(match[1]) : null;
   if (dim == null || dim === VECTOR_DIM) {
-    await createChunkHnsw();
+    await createHnsw(table, indexName);
     return;
   }
-  console.warn(`[DB] kb_chunks.embedding 当前是 ${label || '未知'}，将重建为 vector(${VECTOR_DIM})`);
-  await pool.query('DROP INDEX IF EXISTS idx_kb_chunks_embedding');
-  await pool.query('ALTER TABLE kb_chunks DROP COLUMN IF EXISTS embedding');
-  await pool.query(`ALTER TABLE kb_chunks ADD COLUMN embedding vector(${VECTOR_DIM})`);
-  await createChunkHnsw();
+  console.warn(`[DB] ${table}.embedding 当前是 ${label || '未知'}，将重建为 vector(${VECTOR_DIM})`);
+  await pool.query(`DROP INDEX IF EXISTS ${indexName}`);
+  await pool.query(`ALTER TABLE ${table} DROP COLUMN IF EXISTS embedding`);
+  await pool.query(`ALTER TABLE ${table} ADD COLUMN embedding vector(${VECTOR_DIM})`);
+  await createHnsw(table, indexName);
 }
 
 async function createUniqueIndex(name, sqlText) {
@@ -235,14 +262,14 @@ async function createUniqueIndex(name, sqlText) {
   }
 }
 
-async function createChunkHnsw() {
+async function createHnsw(table, indexName) {
   try {
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_kb_chunks_embedding
-      ON kb_chunks USING hnsw (embedding vector_cosine_ops)
+      CREATE INDEX IF NOT EXISTS ${indexName}
+      ON ${table} USING hnsw (embedding vector_cosine_ops)
     `);
   } catch (err) {
-    console.warn('[DB] 子块 HNSW 索引创建失败，语义检索将走顺序扫描：', err.message);
+    console.warn(`[DB] ${table} HNSW 索引创建失败，语义检索将走顺序扫描：`, err.message);
   }
 }
 

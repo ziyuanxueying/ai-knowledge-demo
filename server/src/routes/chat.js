@@ -3,6 +3,7 @@ import { streamChat, summarizeHistory, estimateTokens } from '../services/ai.ser
 import { config } from '../config/index.js'
 import { getSystemPrompt, QUICK_QUESTIONS } from '../data/knowledge.js'
 import { createSession, getSession, appendMessage, updateSessionSummary } from '../data/store.js'
+import { prepareMemoryContext, rememberTurn, latestTurn } from '../memory/memory.js'
 
 const router = Router()
 
@@ -72,15 +73,14 @@ router.post('/', async (req, res) => {
     //   - 摘要用非流式 chat，用户看不到过程
     const MAX_HISTORY_MESSAGES = 6 // 最近保留 6 条原文 ≈ 3 轮对话
 
-    // 全量 user/assistant 历史
-    const allHistory = session.messages
-      .filter(m => m.role === 'user' || m.role === 'assistant')
+    // 全量 user/assistant 历史。最近几条留原文，更早的进摘要，并按问题召回 Memory RAG。
+    const dialogue = session.messages.filter(m => m.role === 'user' || m.role === 'assistant')
+    const earlier = dialogue
+      .slice(0, -MAX_HISTORY_MESSAGES)
       .map(m => ({ role: m.role, content: m.content }))
-
-    // 分割：早期（待摘要） + 最近（保留原文）
-    // 当历史不足 N 条时，slice(0, -N) 返回空数组，earlier 为空
-    const earlier = allHistory.slice(0, -MAX_HISTORY_MESSAGES)
-    const recentHistory = allHistory.slice(-MAX_HISTORY_MESSAGES)
+    const recentDialogue = dialogue.slice(-MAX_HISTORY_MESSAGES)
+    const recentHistory = recentDialogue.map(m => ({ role: m.role, content: m.content }))
+    const excludeMessageIds = recentDialogue.map(m => m.id)
 
     // 触发摘要：未摘要的早期历史 ≥ 2 条
     if (earlier.length - session.summaryUpTo >= 2) {
@@ -95,14 +95,23 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // 构造最终 messages：system + (摘要) + 最近原文 + 当前问题
+    // 最近原文之外，按当前问题召回更早回合和跨会话事实。失败则只留摘要。
+    const memory = await prepareMemoryContext({
+      query: message,
+      sessionId: session.id,
+      excludeMessageIds,
+    })
+
+    // 构造最终 messages：system + (摘要) + (记忆) + 最近原文 + 当前问题
     const summaryMessages = session.summary
       ? [{ role: 'system', content: `## 早期对话摘要（请据此理解上下文）\n${session.summary}` }]
       : []
+    const memoryMessages = memory.text ? [{ role: 'system', content: memory.text }] : []
 
     const messages = [
       { role: 'system', content: systemPrompt },
       ...summaryMessages,
+      ...memoryMessages,
       ...recentHistory,
       // 当前用户消息
       { role: 'user', content: message },
@@ -136,6 +145,7 @@ router.post('/', async (req, res) => {
         messages: previewMessages,
         totalTokens,
         summary: session.summary || null,
+        memories: memory.items,
         params: sampleParams,
       })}\n\n`
     )
@@ -183,7 +193,17 @@ router.post('/', async (req, res) => {
     }
 
     // 6. 把 AI 完整回复存入历史（中断时也保存已生成的部分内容）
-    await appendMessage(session.id, { role: 'assistant', content: fullContent, usage })
+    const saved = await appendMessage(session.id, { role: 'assistant', content: fullContent, usage })
+    const turn = latestTurn(saved?.messages)
+    if (turn) {
+      await rememberTurn({
+        sessionId: session.id,
+        userMessageId: turn.user.id,
+        assistantMessageId: turn.assistant.id,
+        userContent: turn.user.content,
+        assistantContent: turn.assistant.content,
+      })
+    }
 
     // 7. 发送结束信号（客户端已断开则不再写，避免 EPIPE）
     if (!res.writableEnded) {

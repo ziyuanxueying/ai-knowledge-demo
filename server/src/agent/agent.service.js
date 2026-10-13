@@ -128,10 +128,12 @@ toolName 必须是上面列出的名字。不需要工具时 steps 为空数组�
  * @param {string} params.task - 用户的任务
  * @param {Array} params.history - 最近原文 [{role:'user'|'assistant', content}]，不含本轮工具消息
  * @param {string} params.summary - 早期对话摘要；为空则不注入
+ * @param {string} params.memory - 按当前问题召回的记忆；为空则不注入
+ * @param {Array} params.memories - 召回明细，随 messages 预览推给前端
  * @param {AbortSignal} params.signal - 中断信号
  * @returns {AsyncGenerator} 事件流
  */
-export async function* runAgent({ task, history = [], summary = '', signal }) {
+export async function* runAgent({ task, history = [], summary = '', memory = '', memories = [], signal }) {
   // 【AI 学习要点 - RAG 两种实现策略】：
   //   策略 A（Agentic RAG）：让模型自己决定是否调用 search_frontend_kb 检索
   //     → 依赖模型的工具调用可靠性，小模型（qwen-turbo）常"自以为知道"不调，甚至编造"据知识库"
@@ -164,17 +166,19 @@ export async function* runAgent({ task, history = [], summary = '', signal }) {
     }
   }
 
-  // 组装初始 messages：system + 早期摘要 + 最近原文 + 当前任务
-  // 执行计划在规划完成后插到人设后面。本轮 tool 消息只在循环里追加，不进摘要。
+  // 组装初始 messages：system + 早期摘要 + 召回记忆 + 最近原文 + 当前任务
+  // 执行计划在规划完成后插到人设后面。本轮 tool 消息只在循环里追加，不进摘要，也不进记忆。
   const systemContent = ragContext
     ? `${AGENT_SYSTEM_PROMPT}\n\n## 已检索到的知识库内容（请据此回答，用来源编号 [n] 标注）\n${ragContext}`
     : AGENT_SYSTEM_PROMPT
   const summaryMessages = summary
     ? [{ role: 'system', content: `## 早期对话摘要（请据此理解上下文）\n${summary}` }]
     : []
+  const memoryMessages = memory ? [{ role: 'system', content: memory }] : []
   const messages = [
     { role: 'system', content: systemContent },
     ...summaryMessages,
+    ...memoryMessages,
     ...history
       .filter(m => m.role === 'user' || m.role === 'assistant')
       .map(m => ({ role: m.role, content: m.content })),
@@ -222,6 +226,7 @@ export async function* runAgent({ task, history = [], summary = '', signal }) {
     messages: previewMessages,
     totalTokens: previewMessages.reduce((sum, m) => sum + m.tokens, 0),
     summary: summary || null,
+    memories: memories || [],
   }
 
   // 本轮任务内连续失败的工具不再调用。下一次用户消息会重新开始。

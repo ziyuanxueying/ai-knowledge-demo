@@ -136,6 +136,7 @@ npm run dev
 | 两种 RAG 策略 | Agentic RAG vs 预检索注入的取舍 | `server/src/agent/agent.service.js` |
 | 多轮对话上下文 | 维护 messages 数组实现上下文 | `server/src/services/ai.service.js` |
 | 长对话摘要压缩 | 对话和 Agent 都把早期历史压成摘要；Agent 失败时退回最近 10 条 | `server/src/routes/chat.js`、`server/src/routes/agent.js` |
+| Memory RAG | 按当前问题召回更早回合，并记住跨会话的偏好事实 | `server/src/memory/memory.js` |
 | Token 与计费 | 理解 Token 概念和用量统计 | `server/src/routes/chat.js` |
 | 温度参数 | temperature 控制回答随机性 | `server/src/config/index.js` |
 

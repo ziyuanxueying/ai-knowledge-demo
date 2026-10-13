@@ -369,7 +369,7 @@ cos(a, b) = (a · b) / (|a| × |b|)
 | 3. 分层记忆 | 摘要 + 结构化事实抽取 | 可做个性化 | 实现复杂 |
 | 4. Memory RAG | 把历史向量化，按相关性检索 | 长对话不丢上下文 | 工程量大；需要向量库 |
 
-本项目**已实现策略 2**，代码见 [chat.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/routes/chat.js)。
+本项目**已实现策略 2 和策略 4**。摘要见 [chat.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/routes/chat.js)，按相关性召回见 [memory.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/memory/memory.js)。
 
 ### 3. 本项目实现：摘要压缩策略
 
@@ -392,7 +392,7 @@ session = {
 3. 当 `earlier.length - session.summaryUpTo >= 2` 时触发摘要
 4. 调用 `summarizeHistory(earlier, session.summary)` 生成新摘要（合并旧摘要）
 5. 写回 store：`updateSessionSummary(sessionId, newSummary, earlier.length)`
-6. 构造最终 messages：`system(人设) + system(摘要) + 最近6条原文 + 当前问题`
+6. 构造最终 messages：`system(人设) + system(摘要) + system(Memory RAG，如有) + 最近6条原文 + 当前问题`
 
 **为什么阈值用 2 而不是 1**：避免每轮都触发摘要（成本太高）。每新增 2 条早期历史才合并一次，是个折中。
 
@@ -411,16 +411,20 @@ session = {
 - 摘要调用失败：`catch` 兜底，沿用旧 summary 或退化为滑动窗口，不阻塞主流程
 - Agent 模式：和对话同一套规则。最近 6 条 user/assistant 原文照发，更早的历史每多 2 条压进 `sessions.summary`。本轮循环里的 `tool` 消息不进摘要。摘要失败则退回最近 10 条原文，不挡住回答。发给模型的数组在 Agent 模式的消息预览里也能看到。
 
-### 6. 进阶：升级到 Memory RAG
+### 6. 本项目实现：Memory RAG
 
-策略 2 解决了"早期上下文不丢失"，但仍有局限：摘要会失真、无法精确回溯某条历史。下一步升级到策略 4（Memory RAG）：
+摘要会把早期细节压扁，最近 6 条原文也盖不住更早的原话。策略 4 不替换前两层，而是多一路召回：把已经结束的回合向量化，下次按**当前问题**找回相关原文，再写进 messages。
 
-1. 把每条历史消息向量化（复用 [embedding.service.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/services/embedding.service.js)）
-2. 存到一个"会话记忆库"（复用 [kbStore.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/data/kbStore.js) 的语义检索逻辑）
-3. 每次请求前，按当前问题做余弦相似度检索，召回最相关的 3~5 条历史
-4. 把召回的历史拼进 messages
+实现在 [memory.js](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/server/src/memory/memory.js)，对话和 Agent 都会走。
 
-ChatGPT 的"记忆"功能就是这个思路。
+1. 回答落库后，把「用户 + 助手」收成一段文本，用和知识库相同的 embedding 模型写入 `memories`（`kind = turn`）。向量检索和知识库一样，在库里用 `<=>` 算余弦距离。
+2. 用户消息里出现姓名、偏好、技术栈、约定时，再让模型抽出最多 3 条事实（`kind = fact`）。事实不绑会话。和已有事实相似度 ≥ 0.9 就改写原条，不另起一条。
+3. 下次请求先补上还没向量化的旧回合（每轮最多 6 条），再把当前问题向量化。回合取得分 ≥ 0.61 的前 4 条，事实取得分 ≥ 0.55 的前 3 条，并且只留下和这一路最高分相差 0.12 以内的条目。中文向量的无关文本常常也有 0.4 到 0.6，阈值再低会把只是提到相同技术名词的别的会话召回来。已经放进最近原文的消息会排除，避免和滑动窗口重复。
+4. 命中则多一条 system：`## 按当前问题召回的记忆（Memory RAG）`。和摘要冲突时，以召回的原文为准。
+
+召回或写入失败只打日志，不挡住回答。消息预览里会多一条紫色「记忆」提示，展开后能看到实际注入的原文。删掉会话时，这个会话的回合记忆随外键一起删；长期事实还在，换一个对话仍能召回。
+
+工具结果不进记忆，只记用户原话和助手最终回答。空回复只占一条无向量的记录，避免补写队列反复扫到它。
 
 ---
 
@@ -476,6 +480,7 @@ content.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`)
 system（人设 prompt，Agent 命中检索时父块也写在这里）
 + system（执行计划，仅 Agent）
 + system（早期对话摘要，如有）          ← 第五章的摘要策略
++ system（按当前问题召回的记忆，如有）  ← 第五章的 Memory RAG
 + 最近 6 条历史原文（user/assistant）
 + 当前用户问题
 ```
@@ -489,14 +494,16 @@ res.write(`data: ${JSON.stringify({
   messages: previewMessages,   // 每条含 role / content / chars / tokens
   totalTokens,                 // 总 token 估算
   summary: session.summary,    // 是否注入了摘要
+  memories: memory.items,       // 按当前问题召回的记忆，没有则为 []
 })}\n\n`)
 ```
 
 前端 [MessagePreview.jsx](file:///Users/anyi/Desktop/AIDemos/ai-knowledge-demo/client/src/components/MessagePreview.jsx) 渲染成可折叠面板，展开后能看到：
 
-- 每条消息的**角色 badge**（系统=蓝 / 用户=绿 / 助手=紫 / 摘要=黄）
+- 每条消息的**角色 badge**（系统=蓝 / 用户=绿 / 助手=紫 / 摘要=黄 / 记忆=靛）
 - 每条消息的**字数和估算 token**
 - 摘要触发时的黄色提示条："已注入早期对话摘要（XX 字）"
+- 召回到记忆时的靛色提示条："已按当前问题召回 N 条"
 - 总 token 估算
 
 ### 4. 方案 C：参数调节面板
@@ -805,7 +812,7 @@ variant_done(0) → variant_done(1) → judge_start → judge_done
 学完本项目后，可以探索：
 
 1. **RAG 进阶**：已有父子切块、混合检索、可选 Rerank、检索 Hit@3，以及回答忠实 / 引用编号回归（`npm run eval:answer`）。再往下是真实 BM25、评测进 CI、坏例回流
-2. **上下文管理**：对话和 Agent 都是最近 6 条原文 + 早期摘要；Agent 摘要失败时退回最近 10 条。进阶是接 tokenizer（如 tiktoken）实时精确统计 token，或把历史向量化后按当前问题召回（Memory RAG）
+2. **上下文管理**：对话和 Agent 都是最近 6 条原文 + 早期摘要，并按当前问题召回相关历史（Memory RAG）。再往下是精确 tokenizer（如 tiktoken）动态决定摘要时机
 3. **多模态**：让 AI 看图片、听语音（通义千问 VL 模型）
 4. **ReAct 与规划**：工具循环已是 ReAct，并在循环前先输出执行计划；同一轮工具并行，超时后重试一次。再往下是多 Agent
 5. **多 Agent 协作**：多个 Agent 分工（如一个负责搜索、一个负责总结）
