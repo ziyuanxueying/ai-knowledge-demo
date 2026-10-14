@@ -1614,6 +1614,240 @@ body {
   color: inherit;
 }
 
+.answer-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.answer-feedback-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  background: #fff;
+  color: var(--text-secondary);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.answer-feedback-btn.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(16, 163, 127, 0.08);
+}
+
+.answer-feedback-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.answer-feedback-reason {
+  flex: 1;
+  min-width: 160px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.answer-feedback-error {
+  font-size: 12px;
+  color: #c7254e;
+}
+
+.kb-feedback-count {
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(16, 163, 127, 0.12);
+  color: var(--accent);
+}
+
+.kb-feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.kb-feedback-card {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.kb-feedback-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.kb-feedback-toggle {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kb-feedback-q {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.kb-feedback-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.kb-feedback-card.is-open .kb-feedback-preview {
+  display: none;
+}
+
+.kb-feedback-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.kb-feedback-head-actions .kb-content-toggle {
+  margin: 0;
+}
+
+.kb-feedback-chip {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(16, 163, 127, 0.1);
+  color: var(--accent);
+}
+
+.kb-feedback-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.kb-feedback-meta,
+.kb-feedback-empty {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.kb-feedback-answer {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.kb-feedback-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kb-feedback-title {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.kb-feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.kb-feedback-none {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.kb-feedback-reader-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 18px 24px;
+}
+
+.kb-feedback-section + .kb-feedback-section {
+  margin-top: 16px;
+}
+
+.kb-feedback-label {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.kb-feedback-block {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.kb-feedback-block.is-pre {
+  white-space: pre-wrap;
+}
+
+.kb-feedback-cite {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.kb-feedback-cite + .kb-feedback-cite {
+  margin-top: 8px;
+}
+
+.kb-feedback-cite-title {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .kb-feedback-head {
+    flex-direction: column;
+  }
+
+  .kb-feedback-head-actions {
+    justify-content: flex-start;
+  }
+}
+
 /* Token 用量 */
 .message-usage {
   margin-top: 8px;

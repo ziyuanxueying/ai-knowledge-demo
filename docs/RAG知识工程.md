@@ -132,6 +132,8 @@ npm run eval:rag
 npm run eval:answer
 ```
 
-`.env` 里有 `SSH_HOST` 时，会先打开和 `npm run dev` 相同的数据库隧道。全部通过时退出码为 0，有一条未通过则为 1。它会调用对话模型。检索回归 `npm run eval:rag` 仍然不调用。两套脚本都没进 CI。
+`.env` 里有 `SSH_HOST` 时，会先打开和 `npm run dev` 相同的数据库隧道。全部通过时退出码为 0，有一条未通过则为 1。它会调用对话模型。检索回归 `npm run eval:rag` 不调用对话模型，并在 GitHub Actions 里跑。回答回归仍手动跑。
+
+两套脚本都先跑种子集，再跑 `server/eval/feedback.json` 里已确认的补充题。这份文件由知识库页「无用回答」写入，点踩不会自动改 `golden.json` 或 `answer.json`。补充题的问句是改写后的独立问句；评测时追问改写仍然关闭。
 
 知识库页点「运行回答评测」。6 道题里，闭包、虚拟 DOM、事件循环、Tree Shaking 四道的明细应是「应贴着「…」 · 忠实，引用编号正确」。天气和菜谱应写明未收录，回答里不编来源编号。

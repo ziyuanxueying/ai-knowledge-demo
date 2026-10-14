@@ -5,14 +5,17 @@
  * 与 Agent 预检索同一条 retrieveHybrid：threshold 0.3、Top 5。
  * 追问改写关闭。有未通过的用例时进程退出码为 1。
  */
-import { loadAnswerCases, runAnswerEval } from './answerEval.js';
+import { listAnswerCases, runAnswerEval } from './answerEval.js';
 import { config } from '../config/index.js';
 import { initDB, closeDB } from '../data/db.js';
 import { ensureSeedEntries, syncChunks } from '../data/kbStore.js';
 import { openDbTunnel } from '../sshTunnel.js';
 
-const cases = loadAnswerCases();
-console.log(`回答用例 ${cases.length} 条；Top 5；threshold 0.3；追问改写关闭；模型 ${config.dashscope.model}`);
+const cases = listAnswerCases();
+const extra = cases.filter((item) => item.source === 'feedback').length;
+console.log(
+  `回答用例 ${cases.length} 条（种子 ${cases.length - extra}，补充 ${extra}）；Top 5；threshold 0.3；追问改写关闭；模型 ${config.dashscope.model}`
+);
 console.log('每题会生成回答并调用裁判，和检索回归分开。');
 
 const tunnel = await openDbTunnel();
@@ -24,7 +27,8 @@ try {
 
   const report = await runAnswerEval();
   for (const item of report.cases) {
-    console.log(`${item.ok ? 'PASS' : 'FAIL'} ${item.q}`);
+    const from = item.source === 'feedback' ? '补充 ' : '';
+    console.log(`${item.ok ? 'PASS' : 'FAIL'} ${from}${item.q}`);
     if (!item.ok) {
       for (const reason of item.failures) console.log(`  - ${reason}`);
       if (item.answer) console.log(`  回答：${item.answer.replace(/\s+/g, ' ').slice(0, 180)}`);

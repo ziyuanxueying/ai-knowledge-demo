@@ -14,7 +14,8 @@ ai-knowledge-demo/
 │   ├── 后端开发指南.md
 │   ├── RAG知识工程.md
 │   ├── 线上Docker部署手册.md
-│   └── 与企业级能力对照.md
+│   ├── 与企业级能力对照.md
+│   └── 企业级落差与知识补齐.md
 ├── docker-compose.yml   # 本地 PostgreSQL + pgvector
 └── README.md
 ```
@@ -117,6 +118,7 @@ npm run dev
 | [RAG知识工程](docs/RAG知识工程.md) | 知识库 | 父子切块、混合检索、引用，以及检索 Hit@3 与回答回归 |
 | [线上Docker部署手册](docs/线上Docker部署手册.md) | 部署 | 云服务器全 Docker：Postgres + 应用 + Nginx/HTTPS |
 | [与企业级能力对照](docs/与企业级能力对照.md) | 进阶 | Demo 与企业 RAG/Agent/工程能力的差距与补齐顺序 |
+| [企业级落差与知识补齐](docs/企业级落差与知识补齐.md) | 进阶 | 深度和广度上还缺的知识、学习顺序、先不要展开的内容 |
 
 ## 🧠 AI 学习要点
 

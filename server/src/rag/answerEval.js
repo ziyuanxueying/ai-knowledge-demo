@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../config/index.js';
 import { chat } from '../services/ai.service.js';
 import { judgeGrounding } from '../services/judge.service.js';
+import { loadFeedbackCases } from './feedbackCases.js';
 import { retrieveHybrid } from './retrieve.js';
 
 const answerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'eval', 'answer.json');
@@ -17,6 +18,12 @@ const ANSWER_SYSTEM = `你是前端开发知识库助手。只根据给出的检
 - 检索结果里没有的内容不要写成来自知识库
 - 若结果写明未找到，或命中的父块答非所问，必须写明「知识库未收录」，不要编造编号，也不要说「据知识库」
 用简体中文，控制在 200 字以内。`;
+
+/** 种子题在前，已确认的补充回答题在后。 */
+export function listAnswerCases() {
+  const seed = loadAnswerCases().map((item) => ({ ...item, source: 'seed' }));
+  return [...seed, ...loadFeedbackCases('answer')];
+}
 
 export function loadAnswerCases() {
   const cases = JSON.parse(fs.readFileSync(answerPath, 'utf-8'));
@@ -104,7 +111,7 @@ async function draftAnswer(question, context) {
  * 期望文档没进本次检索时不再调用对话模型。
  */
 export async function runAnswerEval() {
-  const cases = loadAnswerCases();
+  const cases = listAnswerCases();
   const results = [];
 
   for (const item of cases) {
@@ -116,6 +123,7 @@ export async function runAnswerEval() {
     const titles = found.hits.map((hit) => hit.title);
     const base = {
       q: item.q,
+      source: item.source || 'seed',
       expect: expectText(item),
       titles,
       answer: '',

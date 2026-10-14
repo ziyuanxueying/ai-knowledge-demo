@@ -16,6 +16,7 @@ import {
   getIngestConfig,
   getIngestJobs,
 } from '../utils/api.js';
+import AnswerFeedbackQueue from './AnswerFeedbackQueue.jsx';
 import MenuButton from './MenuButton.jsx';
 
 function assertIngestResult(data) {
@@ -520,6 +521,8 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
         </div>
       </div>
 
+      <AnswerFeedbackQueue />
+
       <div className="kb-rag-panel kb-eval-panel">
         <div className="kb-eval-bar">
           <div className="kb-eval-copy">
@@ -532,7 +535,7 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
               )}
             </div>
             <p className="kb-eval-desc">
-              用固定的 42 道题，检查期望文档有没有出现在前 3 条结果里。
+              种子题，加上已确认收进检索集的无用反馈。检查期望文档有没有出现在前 3 条结果里。
             </p>
           </div>
           <div className="kb-eval-actions">
@@ -560,11 +563,12 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
         {evalReport && evalOpen && (
           <div className="kb-eval-list">
             {[...evalReport.cases].sort((a, b) => Number(a.ok) - Number(b.ok)).map((item) => (
-              <div key={`${item.q}-${item.category}-${item.expect}`} className={`kb-eval-row${item.ok ? '' : ' is-miss'}`}>
+              <div key={`${item.source || 'seed'}-${item.q}-${item.category}-${item.expect}`} className={`kb-eval-row${item.ok ? '' : ' is-miss'}`}>
                 <span className="kb-eval-mark">{item.ok ? '通过' : '未过'}</span>
                 <div className="kb-eval-body">
                   <div className="kb-eval-q">
                     {item.q}
+                    {item.source === 'feedback' ? <span className="kb-rag-result-cat">补充</span> : null}
                     {item.category ? <span className="kb-rag-result-cat">{item.category}</span> : null}
                   </div>
                   <div className="kb-eval-detail">
@@ -591,7 +595,7 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
               )}
             </div>
             <p className="kb-eval-desc">
-              用固定问句作答，检查结论是否贴着检索到的父块，以及 [n] 是否对得上。会调用对话模型。
+              种子题，加上已确认收进回答集的无用反馈。检查结论是否贴着父块，以及 [n] 是否对得上。会调用对话模型。
             </p>
           </div>
           <div className="kb-eval-actions">
@@ -619,10 +623,13 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
         {answerReport && answerOpen && (
           <div className="kb-eval-list">
             {[...answerReport.cases].sort((a, b) => Number(a.ok) - Number(b.ok)).map((item) => (
-              <div key={item.q} className={`kb-eval-row${item.ok ? '' : ' is-miss'}`}>
+              <div key={`${item.source || 'seed'}-${item.q}`} className={`kb-eval-row${item.ok ? '' : ' is-miss'}`}>
                 <span className="kb-eval-mark">{item.ok ? '通过' : '未过'}</span>
                 <div className="kb-eval-body">
-                  <div className="kb-eval-q">{item.q}</div>
+                  <div className="kb-eval-q">
+                    {item.q}
+                    {item.source === 'feedback' ? <span className="kb-rag-result-cat">补充</span> : null}
+                  </div>
                   <div className="kb-eval-detail">
                     {item.expect}
                     {item.failures?.length ? ` · ${item.failures.join('；')}` : ' · 忠实，引用编号正确'}

@@ -148,6 +148,11 @@ export async function* runAgent({ task, history = [], summary = '', memory = '',
   if (shouldForceKbRetrieve(task)) {
     try {
       const found = await retrieveHybrid(task, { history, topK: 5, threshold: 0.3 })
+      yield {
+        type: 'retrieval',
+        rewrittenQuery: found.rewrittenQuery || task,
+        embeddingModel: config.dashscope.embeddingModel,
+      }
       if (found.hits.length > 0) {
         ragContext = found.text
         yield { type: 'citations', citations: found.citations }
@@ -307,8 +312,15 @@ export async function* runAgent({ task, history = [], summary = '', memory = '',
 
       for (const item of executed) {
         if (item.failed && !item.stopped) stoppedTools.add(item.toolName)
-        if (item.toolName === 'search_frontend_kb' && item.citations?.length) {
-          yield { type: 'citations', citations: item.citations.map((cite) => ({ ...cite })) }
+        if (item.toolName === 'search_frontend_kb') {
+          yield {
+            type: 'retrieval',
+            rewrittenQuery: String(item.args?.keyword || ''),
+            embeddingModel: config.dashscope.embeddingModel,
+          }
+          if (item.citations?.length) {
+            yield { type: 'citations', citations: item.citations.map((cite) => ({ ...cite })) }
+          }
         }
         yield {
           type: 'tool',

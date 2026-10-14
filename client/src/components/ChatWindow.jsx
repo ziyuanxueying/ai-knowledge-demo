@@ -5,7 +5,7 @@ import WelcomeScreen from './WelcomeScreen.jsx'
 /**
  * 聊天主窗口
  */
-export default function ChatWindow({ messages, error, onSelectQuestion, mode = 'chat' }) {
+export default function ChatWindow({ messages, error, onSelectQuestion, onFeedback, mode = 'chat' }) {
   const bottomRef = useRef(null)
 
   // 新消息时自动滚动到底部
@@ -21,7 +21,7 @@ export default function ChatWindow({ messages, error, onSelectQuestion, mode = '
       ) : (
         <div className="message-list">
           {messages.map(msg => (
-            <Message key={msg.id} message={msg} mode={mode} />
+            <Message key={msg.id} message={msg} mode={mode} onFeedback={onFeedback} />
           ))}
           {error && (
             <div

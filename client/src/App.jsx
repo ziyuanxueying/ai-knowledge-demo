@@ -231,6 +231,7 @@ export default function App() {
               messages={messages}
               error={error}
               onSelectQuestion={handleSend}
+              onFeedback={isAgent ? agent.submitFeedback : undefined}
               mode={mode}
             />
 

@@ -1,0 +1,49 @@
+name: eval-rag
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  retrieval:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_knowledge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ai_knowledge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: install server
+        working-directory: server
+        run: npm ci
+      - name: require embedding key
+        env:
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+        run: |
+          if [ -z "$DASHSCOPE_API_KEY" ]; then
+            echo "仓库 Secrets 需要 DASHSCOPE_API_KEY。检索回归的向量路没有这把钥匙就没有结果。"
+            exit 1
+          fi
+      - name: retrieval regression
+        working-directory: server
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ai_knowledge
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          EMBEDDING_MODEL: text-embedding-v3
+          QWEN_MODEL: qwen-turbo
+        run: npm run eval:rag

@@ -12,16 +12,46 @@
 import { query, withTransaction } from './db.js';
 
 function mapMessage(m) {
+  const {
+    feedbackId,
+    feedbackVerdict,
+    feedbackReason,
+    retrievalPromotedAt,
+    answerPromotedAt,
+    ...rest
+  } = m;
   return {
-    ...m,
-    usage: m.usage ? JSON.parse(m.usage) : undefined,
-    toolSteps: m.toolSteps ? JSON.parse(m.toolSteps) : undefined,
-    citations: m.citations ? JSON.parse(m.citations) : undefined,
+    ...rest,
+    usage: rest.usage ? JSON.parse(rest.usage) : undefined,
+    toolSteps: rest.toolSteps ? JSON.parse(rest.toolSteps) : undefined,
+    citations: rest.citations ? JSON.parse(rest.citations) : undefined,
+    retrieval: rest.retrieval ? JSON.parse(rest.retrieval) : undefined,
+    feedback: feedbackId
+      ? {
+          id: feedbackId,
+          verdict: feedbackVerdict,
+          reason: feedbackReason || '',
+          retrievalPromotedAt: retrievalPromotedAt || '',
+          answerPromotedAt: answerPromotedAt || '',
+        }
+      : undefined,
   };
 }
 
 async function getMessages(sessionId) {
-  const res = await query('SELECT * FROM messages WHERE "sessionId" = $1 ORDER BY seq ASC', [sessionId]);
+  const res = await query(
+    `SELECT m.*,
+            f.id AS "feedbackId",
+            f.verdict AS "feedbackVerdict",
+            f.reason AS "feedbackReason",
+            f."retrievalPromotedAt",
+            f."answerPromotedAt"
+     FROM messages m
+     LEFT JOIN answer_feedback f ON f."messageId" = m.id
+     WHERE m."sessionId" = $1
+     ORDER BY m.seq ASC`,
+    [sessionId]
+  );
   return res.rows.map(mapMessage);
 }
 
@@ -115,7 +145,7 @@ export async function getSession(sessionId) {
 /**
  * 追加消息到会话
  * @param {string} sessionId
- * @param {object} message - {role, content, usage?, toolSteps?, citations?}
+ * @param {object} message - {role, content, usage?, toolSteps?, citations?, retrieval?}
  * @returns {Promise<object|null>} 更新后的 session
  */
 export async function appendMessage(sessionId, message) {
@@ -126,8 +156,8 @@ export async function appendMessage(sessionId, message) {
     if (!session) return null;
 
     await client.query(
-      `INSERT INTO messages (id, "sessionId", role, content, usage, "toolSteps", citations, "createdAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO messages (id, "sessionId", role, content, usage, "toolSteps", citations, retrieval, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         sessionId,
@@ -136,6 +166,7 @@ export async function appendMessage(sessionId, message) {
         message.usage ? JSON.stringify(message.usage) : null,
         message.toolSteps ? JSON.stringify(message.toolSteps) : null,
         message.citations ? JSON.stringify(message.citations) : null,
+        message.retrieval ? JSON.stringify(message.retrieval) : null,
         now,
       ]
     );

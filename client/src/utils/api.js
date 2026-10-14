@@ -296,7 +296,7 @@ export async function sendAgentTask(
               return
             case 'done':
               onUsage?.(parsed.usage)
-              onDone?.()
+              onDone?.(parsed)
               return
           }
         } catch {
@@ -440,6 +440,38 @@ export async function ingestRepo(url, branch = '') {
     body: JSON.stringify({ url, branch }),
   })
   return res.json()
+}
+
+/** 给一条已落库的 Agent 回答记有用或无用。 */
+export async function saveAnswerFeedback({ messageId, verdict, reason }) {
+  const res = await fetch(`${API_BASE}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messageId, verdict, reason }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || '保存反馈失败')
+  return data.feedback
+}
+
+/** 知识库页列出无用反馈。 */
+export async function listUselessFeedback() {
+  const res = await fetch(`${API_BASE}/feedback?verdict=useless`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || '读取反馈失败')
+  return data.feedback || []
+}
+
+/** 人工确认后把一条无用反馈收进补充评测集。 */
+export async function promoteAnswerFeedback(id, body) {
+  const res = await fetch(`${API_BASE}/feedback/${encodeURIComponent(id)}/promote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || '收进评测集失败')
+  return data
 }
 
 export async function runKnowledgeEval() {

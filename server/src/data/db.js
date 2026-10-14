@@ -120,6 +120,30 @@ export async function initDB() {
     'CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages("sessionId", seq)'
   );
   await pool.query('ALTER TABLE messages ADD COLUMN IF NOT EXISTS citations TEXT');
+  await pool.query('ALTER TABLE messages ADD COLUMN IF NOT EXISTS retrieval TEXT');
+
+  // Agent 回答的有用/无用。点踩不自动进评测集，确认后再写入 eval/feedback.json。
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS answer_feedback (
+      id                    TEXT PRIMARY KEY,
+      "sessionId"           TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      "messageId"           TEXT NOT NULL,
+      question              TEXT NOT NULL,
+      "rewrittenQuery"      TEXT NOT NULL DEFAULT '',
+      citations             TEXT NOT NULL DEFAULT '[]',
+      answer                TEXT NOT NULL DEFAULT '',
+      "embeddingModel"      TEXT NOT NULL DEFAULT '',
+      verdict               TEXT NOT NULL,
+      reason                TEXT NOT NULL DEFAULT '',
+      "retrievalPromotedAt" TEXT NOT NULL DEFAULT '',
+      "answerPromotedAt"    TEXT NOT NULL DEFAULT '',
+      "createdAt"           TEXT NOT NULL,
+      "updatedAt"           TEXT NOT NULL
+    )
+  `);
+  await pool.query(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_answer_feedback_message ON answer_feedback ("messageId")'
+  );
 
   // Memory RAG：回合原文（kind=turn，随会话删除）和跨会话事实（kind=fact，sessionId 为空）
   await pool.query(`

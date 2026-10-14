@@ -10,6 +10,7 @@ import knowledgeRouter from './routes/knowledge.js'
 import historyRouter from './routes/history.js'
 import promptsRouter from './routes/prompts.js'
 import compareRouter from './routes/compare.js'
+import feedbackRouter from './routes/feedback.js'
 import { config } from './config/index.js'
 import { initDB, pingDB, closeDB } from './data/db.js'
 import { seedIfEmpty, syncChunks } from './data/kbStore.js'
@@ -85,6 +86,7 @@ app.use('/api/agent', aiLimiter, agentRouter)
 app.use('/api/compare', aiLimiter, compareRouter)
 // 普通接口用宽松限流
 app.use('/api/knowledge', apiLimiter, knowledgeRouter)
+app.use('/api/feedback', apiLimiter, feedbackRouter)
 app.use('/api/history', apiLimiter, historyRouter)
 app.use('/api/prompts', apiLimiter, promptsRouter)
 

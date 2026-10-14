@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { runAgent } from '../agent/agent.service.js';
+import { config } from '../config/index.js';
 import { summarizeHistory } from '../services/ai.service.js';
 import { createSession, getSession, appendMessage, updateSessionSummary } from '../data/store.js';
 import { prepareMemoryContext, rememberTurn, latestTurn } from '../memory/memory.js';
@@ -116,6 +117,7 @@ router.post('/', async (req, res) => {
     let fullContent = '';
     let usage = null;
     let citations = null;
+    let retrieval = null;
     const steps = []; // 记录工具调用步骤，存入历史
 
     try {
@@ -149,6 +151,15 @@ router.post('/', async (req, res) => {
             res.write(`data: ${JSON.stringify(event)}\n\n`);
             break;
           }
+          case 'retrieval':
+            // 预检索先到，保留改写后的问句。后面的工具检索只有在还没有改写结果时才补上。
+            if (!retrieval) {
+              retrieval = {
+                rewrittenQuery: String(event.rewrittenQuery || ''),
+                embeddingModel: String(event.embeddingModel || config.dashscope.embeddingModel || ''),
+              };
+            }
+            break;
           case 'citations':
             citations = event.citations;
             res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -187,6 +198,7 @@ router.post('/', async (req, res) => {
       usage,
       toolSteps: steps.length > 0 ? steps : undefined,
       citations: citations || undefined,
+      retrieval: retrieval || undefined,
     });
     const turn = latestTurn(saved?.messages);
     if (turn) {
@@ -199,7 +211,13 @@ router.post('/', async (req, res) => {
       });
     }
 
-    res.write(`data: ${JSON.stringify({ type: 'done', usage })}\n\n`);
+    const assistant = [...(saved?.messages || [])].reverse().find((item) => item.role === 'assistant');
+    res.write(`data: ${JSON.stringify({
+      type: 'done',
+      usage,
+      messageId: assistant?.id,
+      retrieval: assistant?.retrieval || null,
+    })}\n\n`);
     res.write('data: [DONE]\n\n');
     finished = true;
     res.end();

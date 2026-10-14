@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../config/index.js';
+import { loadFeedbackCases } from './feedbackCases.js';
 import { retrieveHybrid } from './retrieve.js';
 
 const goldenPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'eval', 'golden.json');
@@ -68,9 +69,15 @@ function validateCases(items) {
   });
 }
 
+/** 种子题在前，已确认的补充检索题在后。 */
+export function listRetrievalCases() {
+  const seed = loadGoldenCases().map((item) => ({ ...item, source: 'seed' }));
+  return [...seed, ...loadFeedbackCases('retrieval')];
+}
+
 /** 对黄金集逐题跑混合检索。与 Agent 相同：threshold 0.3、Top 3，追问改写关闭。 */
 export async function runGoldenEval() {
-  const cases = loadGoldenCases();
+  const cases = listRetrievalCases();
   const results = [];
   for (const item of cases) {
     const found = await retrieveHybrid(item.q, {
@@ -84,6 +91,7 @@ export async function runGoldenEval() {
     results.push({
       q: item.q,
       category: item.category || '',
+      source: item.source || 'seed',
       expect: expectText(item),
       ok: graded.ok,
       failures: graded.failures,

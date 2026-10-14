@@ -9,11 +9,14 @@ import { config } from '../config/index.js';
 import { initDB, closeDB } from '../data/db.js';
 import { ensureSeedEntries, syncChunks } from '../data/kbStore.js';
 import { openDbTunnel } from '../sshTunnel.js';
-import { GOLDEN_TOP_K, loadGoldenCases, runGoldenEval } from './goldenEval.js';
+import { GOLDEN_TOP_K, listRetrievalCases, runGoldenEval } from './goldenEval.js';
 
-const cases = loadGoldenCases();
+const cases = listRetrievalCases();
+const extra = cases.filter((item) => item.source === 'feedback').length;
 const rerank = config.dashscope.rerankModel || '未配置';
-console.log(`用例 ${cases.length} 条；Top ${GOLDEN_TOP_K}；threshold 0.3；追问改写关闭；Rerank ${rerank}`);
+console.log(
+  `用例 ${cases.length} 条（种子 ${cases.length - extra}，补充 ${extra}）；Top ${GOLDEN_TOP_K}；threshold 0.3；追问改写关闭；Rerank ${rerank}`
+);
 
 const tunnel = await openDbTunnel();
 let exitCode = 1;
@@ -26,7 +29,8 @@ try {
   for (const item of report.cases) {
     const scope = item.category ? ` [${item.category}]` : '';
     const actual = item.titles.join(' | ') || '(空)';
-    console.log(`${item.ok ? 'HIT' : 'MISS'} ${item.q}${scope}  =>  ${actual}`);
+    const from = item.source === 'feedback' ? '补充 ' : '';
+    console.log(`${item.ok ? 'HIT' : 'MISS'} ${from}${item.q}${scope}  =>  ${actual}`);
   }
 
   console.log(`\nHit@${report.topK} ${report.hits}/${report.total} (${(report.rate * 100).toFixed(1)}%)`);

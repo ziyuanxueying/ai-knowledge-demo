@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
-import { getSessionDetail, sendAgentTask } from '../utils/api.js'
+import { getSessionDetail, saveAnswerFeedback, sendAgentTask } from '../utils/api.js'
 
 /**
  * Agent 模式 Hook
@@ -118,12 +118,17 @@ export function useAgent(onTurnEnd) {
               return next
             })
           },
-          onDone: () => {
+          onDone: payload => {
             setMessages(prev => {
               const next = [...prev]
               const last = next[next.length - 1]
               if (last && last.role === 'assistant') {
-                next[next.length - 1] = { ...last, streaming: false }
+                next[next.length - 1] = {
+                  ...last,
+                  streaming: false,
+                  id: payload?.messageId || last.id,
+                  retrieval: payload?.retrieval || last.retrieval,
+                }
               }
               return next
             })
@@ -184,6 +189,13 @@ export function useAgent(onTurnEnd) {
     }
   }, [currentSessionId])
 
+  /** 有用 / 无用。回答必须已经落库，刷新后仍在。 */
+  const submitFeedback = useCallback(async (messageId, { verdict, reason }) => {
+    const feedback = await saveAnswerFeedback({ messageId, verdict, reason })
+    setMessages(prev => prev.map(item => (item.id === messageId ? { ...item, feedback } : item)))
+    return feedback
+  }, [])
+
   /** 新建对话 */
   const newChat = useCallback(() => {
     setCurrentSessionId(null)
@@ -199,6 +211,7 @@ export function useAgent(onTurnEnd) {
     loading,
     error,
     sendTask,
+    submitFeedback,
     stopGenerate,
     loadSession,
     newChat,

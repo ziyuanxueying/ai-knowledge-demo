@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -74,7 +74,77 @@ function CiteExcerpt({ text, start, end }) {
   );
 }
 
-export default function Message({ message, mode = 'chat' }) {
+function AnswerFeedback({ feedback, onSubmit }) {
+  const [reason, setReason] = useState(feedback?.reason || '');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const verdict = feedback?.verdict || '';
+
+  useEffect(() => {
+    setReason(feedback?.reason || '');
+  }, [feedback?.reason, feedback?.verdict]);
+
+  async function send(nextVerdict, nextReason) {
+    setPending(true);
+    setError('');
+    try {
+      await onSubmit({
+        verdict: nextVerdict,
+        reason: nextVerdict === 'useless' ? nextReason : '',
+      });
+    } catch (err) {
+      setError(err.message || '保存失败');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const reasonDirty = verdict === 'useless' && reason.trim() !== (feedback?.reason || '');
+
+  return (
+    <div className="answer-feedback">
+      <button
+        type="button"
+        className={`answer-feedback-btn${verdict === 'useful' ? ' is-on' : ''}`}
+        disabled={pending}
+        onClick={() => send('useful', '')}
+      >
+        有用
+      </button>
+      <button
+        type="button"
+        className={`answer-feedback-btn${verdict === 'useless' ? ' is-on' : ''}`}
+        disabled={pending}
+        onClick={() => send('useless', reason)}
+      >
+        无用
+      </button>
+      {verdict === 'useless' && (
+        <>
+          <input
+            className="answer-feedback-reason"
+            value={reason}
+            maxLength={200}
+            placeholder="原因（可选）"
+            disabled={pending}
+            onChange={(event) => setReason(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && reasonDirty) send('useless', reason);
+            }}
+          />
+          {reasonDirty && (
+            <button type="button" className="answer-feedback-btn" disabled={pending} onClick={() => send('useless', reason)}>
+              保存原因
+            </button>
+          )}
+        </>
+      )}
+      {error && <span className="answer-feedback-error">{error}</span>}
+    </div>
+  );
+}
+
+export default function Message({ message, mode = 'chat', onFeedback }) {
   const [openCite, setOpenCite] = useState(null);
   const isUser = message.role === 'user';
   const steps = message.steps?.length ? message.steps : message.toolSteps;
@@ -157,6 +227,12 @@ export default function Message({ message, mode = 'chat' }) {
               );
             })}
           </div>
+        )}
+        {mode === 'agent' && !isUser && !message.streaming && message.id?.startsWith('m_') && onFeedback && (
+          <AnswerFeedback
+            feedback={message.feedback}
+            onSubmit={(payload) => onFeedback(message.id, payload)}
+          />
         )}
         {!isUser && !message.streaming && message.usage && (
           <div className="message-usage">
