@@ -2,7 +2,7 @@ import OpenAI from 'openai'
 import { config } from '../config/index.js'
 import { estimateTokens } from '../services/ai.service.js'
 import { AGENT_TOOLS, invokeTool } from './tools.js'
-import { retrieveHybrid, toDisplayHits } from '../rag/retrieve.js'
+import { retrieveHybrid, shouldRetrieve, toDisplayHits } from '../rag/retrieve.js'
 
 /**
  * Agent 服务
@@ -145,7 +145,7 @@ export async function* runAgent({ task, history = [], summary = '', memory = '',
 
   // 步骤 1：预检索（retrieval）—— 用语义检索从知识库找相关内容
   let ragContext = ''
-  if (shouldForceKbRetrieve(task)) {
+  if (shouldRetrieve(task)) {
     try {
       const found = await retrieveHybrid(task, { history, topK: 5, threshold: 0.3 })
       yield {
@@ -370,20 +370,6 @@ export async function* runAgent({ task, history = [], summary = '', memory = '',
   if (totalUsage) {
     yield { type: 'usage', usage: totalUsage }
   }
-}
-
-/**
- * 判断是否应在第一轮强制检索知识库（always-retrieve 策略）
- * 纯问候/闲聊不强制；其余查询都先检索，保证 RAG 生效。
- */
-function shouldForceKbRetrieve(task) {
-  const t = String(task || '').trim()
-  if (!t) return false
-  // 纯问候 / 闲聊 / 自我介绍请求，不强制检索
-  if (/^(你好|您好|hi|hello|嗨|在吗|谢谢|再见|你是谁|介绍下你自己|你是干什么的)/i.test(t)) {
-    return false
-  }
-  return true
 }
 
 /**

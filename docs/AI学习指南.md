@@ -29,7 +29,7 @@
 
 **产品形态**：
 
-1. **对话模式**（`/api/chat`）：多轮问答，SSE；可选摘要压缩、参数滑块、messages 预览。
+1. **对话模式**（`/api/chat`）：多轮问答，SSE；非问候先混合检索并带来源卡片；可选摘要压缩、参数滑块、messages 预览。
 2. **Agent 模式**（`/api/agent`）：与对话相同的摘要压缩，再预检索 + Function Calling 循环。前端展示工具步骤，也能看到发给模型的 messages。
 3. **知识库管理**（`/api/knowledge`）：CRUD + 向量化 + 关键词/语义对比。
 4. **A/B 实验室**（`/api/compare`）：两套配置并行生成，可选 LLM 裁判；不写会话。

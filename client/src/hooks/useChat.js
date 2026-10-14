@@ -4,6 +4,7 @@ import {
   getSessions,
   getSessionDetail,
   deleteSession as apiDeleteSession,
+  saveAnswerFeedback,
 } from '../utils/api.js';
 
 /**
@@ -158,6 +159,16 @@ export function useChat() {
           // 后端在调用模型前推送的最终 messages 数组（含 token 估算）
           setPreviewMessages(data);
         },
+        onCitations: (citations) => {
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last && last.role === 'assistant') {
+              next[next.length - 1] = { ...last, citations };
+            }
+            return next;
+          });
+        },
         onChunk: (content) => {
           // 流式更新最后一条 AI 消息
           setMessages((prev) => {
@@ -179,12 +190,17 @@ export function useChat() {
             return next;
           });
         },
-        onDone: () => {
+        onDone: (payload) => {
           setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
             if (last && last.role === 'assistant') {
-              next[next.length - 1] = { ...last, streaming: false };
+              next[next.length - 1] = {
+                ...last,
+                streaming: false,
+                id: payload?.messageId || last.id,
+                retrieval: payload?.retrieval || last.retrieval,
+              };
             }
             return next;
           });
@@ -211,6 +227,13 @@ export function useChat() {
       }
     );
   }, [loading, currentSessionId, loadSessions, scenario, modelParams.temperature, modelParams.maxTokens]);
+
+  /** 有用 / 无用。回答必须已经落库。 */
+  const submitFeedback = useCallback(async (messageId, { verdict, reason }) => {
+    const feedback = await saveAnswerFeedback({ messageId, verdict, reason });
+    setMessages((prev) => prev.map((item) => (item.id === messageId ? { ...item, feedback } : item)));
+    return feedback;
+  }, []);
 
   /** 停止生成 */
   const stopGenerate = useCallback(() => {
@@ -240,6 +263,7 @@ export function useChat() {
     setModelParams,
     resetModelParams,
     sendMessage,
+    submitFeedback,
     stopGenerate,
     newChat,
     loadSessions,

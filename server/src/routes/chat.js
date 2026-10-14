@@ -4,6 +4,7 @@ import { config } from '../config/index.js'
 import { getSystemPrompt, QUICK_QUESTIONS } from '../data/knowledge.js'
 import { createSession, getSession, appendMessage, updateSessionSummary } from '../data/store.js'
 import { prepareMemoryContext, rememberTurn, latestTurn } from '../memory/memory.js'
+import { retrieveHybrid, shouldRetrieve } from '../rag/retrieve.js'
 
 const router = Router()
 
@@ -102,6 +103,26 @@ router.post('/', async (req, res) => {
       excludeMessageIds,
     })
 
+    // 非问候先走和 Agent 相同的混合检索。命中才把父块注入人设，并要求用来源编号。
+    let retrieval = null
+    let citations = null
+    let prompt = systemPrompt
+    if (shouldRetrieve(message)) {
+      try {
+        const found = await retrieveHybrid(message, { history: recentHistory, topK: 5, threshold: 0.3 })
+        retrieval = {
+          rewrittenQuery: found.rewrittenQuery || message,
+          embeddingModel: config.dashscope.embeddingModel,
+        }
+        if (found.hits.length > 0) {
+          citations = found.citations
+          prompt = `${systemPrompt}\n\n## 已检索到的知识库内容（请据此回答，用来源编号 [n] 标注）\n${found.text}`
+        }
+      } catch (err) {
+        console.error('对话预检索失败:', err.message)
+      }
+    }
+
     // 构造最终 messages：system + (摘要) + (记忆) + 最近原文 + 当前问题
     const summaryMessages = session.summary
       ? [{ role: 'system', content: `## 早期对话摘要（请据此理解上下文）\n${session.summary}` }]
@@ -109,7 +130,7 @@ router.post('/', async (req, res) => {
     const memoryMessages = memory.text ? [{ role: 'system', content: memory.text }] : []
 
     const messages = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: prompt },
       ...summaryMessages,
       ...memoryMessages,
       ...recentHistory,
@@ -149,6 +170,9 @@ router.post('/', async (req, res) => {
         params: sampleParams,
       })}\n\n`
     )
+    if (citations) {
+      res.write(`data: ${JSON.stringify({ type: 'citations', citations })}\n\n`)
+    }
 
     // 5. 调用 AI 流式接口，逐段推送
     let fullContent = ''
@@ -193,7 +217,13 @@ router.post('/', async (req, res) => {
     }
 
     // 6. 把 AI 完整回复存入历史（中断时也保存已生成的部分内容）
-    const saved = await appendMessage(session.id, { role: 'assistant', content: fullContent, usage })
+    const saved = await appendMessage(session.id, {
+      role: 'assistant',
+      content: fullContent,
+      usage,
+      citations: citations || undefined,
+      retrieval: retrieval || undefined,
+    })
     const turn = latestTurn(saved?.messages)
     if (turn) {
       await rememberTurn({
@@ -207,7 +237,13 @@ router.post('/', async (req, res) => {
 
     // 7. 发送结束信号（客户端已断开则不再写，避免 EPIPE）
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ type: 'done', usage })}\n\n`)
+      const assistant = [...(saved?.messages || [])].reverse().find((item) => item.role === 'assistant')
+      res.write(`data: ${JSON.stringify({
+        type: 'done',
+        usage,
+        messageId: assistant?.id,
+        retrieval: assistant?.retrieval || null,
+      })}\n\n`)
       res.write('data: [DONE]\n\n')
       finished = true
       res.end()

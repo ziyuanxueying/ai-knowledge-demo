@@ -40,11 +40,6 @@ export async function saveAnswerFeedback({ messageId, verdict, reason }) {
     error.status = 404;
     throw error;
   }
-  if (session.mode !== 'agent') {
-    const error = new Error('只有 Agent 回答可以反馈');
-    error.status = 400;
-    throw error;
-  }
   const index = session.messages.findIndex((item) => item.id === messageId);
   const message = session.messages[index];
   if (!message || message.role !== 'assistant') {

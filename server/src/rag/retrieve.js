@@ -35,6 +35,18 @@ const HIT_COLS = `
 `;
 
 /**
+ * 纯问候不检索。对话和 Agent 共用这一条，避免闲聊也去打知识库。
+ */
+export function shouldRetrieve(text) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  if (/^(你好|您好|hi|hello|嗨|在吗|谢谢|再见|你是谁|介绍下你自己|你是干什么的)/i.test(value)) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Agent 使用的混合检索。首问用原句；有历史时尝试把追问改写成独立问句。
  */
 export async function retrieveHybrid(queryText, options = {}) {

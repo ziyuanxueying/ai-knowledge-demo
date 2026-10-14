@@ -263,7 +263,7 @@ export default function AnswerFeedbackQueue() {
             {items.length > 0 && <span className="kb-feedback-count">{items.length}</span>}
           </div>
           <p className="kb-eval-desc">
-            Agent 回答点「无用」后出现在这里。确认期望标题后才写入补充评测集，不会改种子题。
+            对话或 Agent 回答点「无用」后出现在这里。确认期望标题后才写入补充评测集，不会改种子题。
           </p>
         </div>
         <div className="kb-eval-actions">

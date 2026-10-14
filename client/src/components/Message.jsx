@@ -228,7 +228,7 @@ export default function Message({ message, mode = 'chat', onFeedback }) {
             })}
           </div>
         )}
-        {mode === 'agent' && !isUser && !message.streaming && message.id?.startsWith('m_') && onFeedback && (
+        {!isUser && !message.streaming && message.id?.startsWith('m_') && onFeedback && (
           <AnswerFeedback
             feedback={message.feedback}
             onSubmit={(payload) => onFeedback(message.id, payload)}

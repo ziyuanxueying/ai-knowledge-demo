@@ -5,7 +5,7 @@ const router = Router();
 
 /**
  * POST /api/feedback
- * 给一条已落库的 Agent 回答记有用或无用。body: { messageId, verdict, reason? }
+ * 给一条已落库的对话或 Agent 回答记有用或无用。body: { messageId, verdict, reason? }
  */
 router.post('/', async (req, res) => {
   try {

@@ -23,7 +23,7 @@ const API_BASE = '/api'
  */
 export async function sendChatMessage(
   { message, sessionId, scenario = 'frontend_dev', temperature, maxTokens },
-  { onChunk, onSession, onUsage, onMessages, onDone, onError, signal }
+  { onChunk, onSession, onUsage, onMessages, onCitations, onDone, onError, signal }
 ) {
   let response
   try {
@@ -79,6 +79,9 @@ export async function sendChatMessage(
             case 'messages':
               onMessages?.(parsed)
               break
+            case 'citations':
+              onCitations?.(parsed.citations)
+              break
             case 'content':
               onChunk?.(parsed.content)
               break
@@ -93,7 +96,7 @@ export async function sendChatMessage(
               return
             case 'done':
               onUsage?.(parsed.usage)
-              onDone?.()
+              onDone?.(parsed)
               return
           }
         } catch {

@@ -231,7 +231,7 @@ export default function App() {
               messages={messages}
               error={error}
               onSelectQuestion={handleSend}
-              onFeedback={isAgent ? agent.submitFeedback : undefined}
+              onFeedback={isAgent ? agent.submitFeedback : chat.submitFeedback}
               mode={mode}
             />
 
