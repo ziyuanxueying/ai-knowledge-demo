@@ -15,6 +15,7 @@ import {
   findActiveWebEntry,
   DuplicateKnowledgeError,
 } from '../data/kbStore.js';
+import { loadKnowledgeUsage } from '../data/knowledgeUsage.js';
 import { searchCompare } from '../rag/retrieve.js';
 import { runGoldenEval } from '../rag/goldenEval.js';
 import { runAnswerEval } from '../rag/answerEval.js';
@@ -35,7 +36,7 @@ const router = Router();
  * 另提供 RAG 相关接口：检索对比、向量化统计、重新生成向量。
  * Agent 的搜索直接调用 rag/retrieve.js，不走这些路由。
  *
- * 注意：具名路由（/search、/stats、/embeddings/regenerate）必须在
+ * 注意：具名路由（/search、/stats、/usage、/embeddings/regenerate）必须在
  *       /:id 之前定义，否则会被 :id 参数路由捕获。
  */
 
@@ -45,6 +46,18 @@ const router = Router();
  */
 router.get('/stats', async (req, res) => {
   res.json(await stats());
+});
+
+/**
+ * GET /api/knowledge/usage
+ * 按父文档统计已落库来源：被引用次数、出现在无用回答里的次数、最近引用时间，以及从未引用的已入库条目。
+ */
+router.get('/usage', async (req, res) => {
+  try {
+    res.json(await loadKnowledgeUsage());
+  } catch (err) {
+    res.status(500).json({ error: err.message || '读取文档用量失败' });
+  }
 });
 
 /**

@@ -1838,7 +1838,82 @@ body {
   font-weight: 600;
 }
 
+.kb-usage-table-wrap {
+  overflow-x: auto;
+  padding: 0 16px 12px;
+}
+
+.kb-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.kb-usage-table th,
+.kb-usage-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.kb-usage-table th {
+  color: var(--text-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.kb-usage-table td:nth-child(n + 2),
+.kb-usage-table th:nth-child(n + 2) {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.kb-usage-title {
+  color: var(--text-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+
+.kb-usage-category {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.kb-usage-missed {
+  padding: 0 16px 14px;
+}
+
+.kb-usage-missed-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kb-usage-missed-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.kb-usage-missed-list .kb-usage-category {
+  margin-top: 0;
+  flex: none;
+}
+
 @media (max-width: 720px) {
+  .kb-usage-title {
+    max-width: 180px;
+  }
+
   .kb-feedback-head {
     flex-direction: column;
   }

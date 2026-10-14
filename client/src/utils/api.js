@@ -403,6 +403,14 @@ export async function getKbStats() {
   return res.json()
 }
 
+/** 文档用量：被引用、出现在无用回答、从未引用。 */
+export async function getKnowledgeUsage() {
+  const res = await fetch(`${API_BASE}/knowledge/usage`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || '读取文档用量失败')
+  return data
+}
+
 /**
  * 检索对比：同时返回关键词检索与语义检索结果
  * @param {string} q - 查询

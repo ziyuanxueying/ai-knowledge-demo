@@ -17,6 +17,7 @@ import {
   getIngestJobs,
 } from '../utils/api.js';
 import AnswerFeedbackQueue from './AnswerFeedbackQueue.jsx';
+import KnowledgeUsage from './KnowledgeUsage.jsx';
 import MenuButton from './MenuButton.jsx';
 
 function assertIngestResult(data) {
@@ -522,6 +523,8 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
       </div>
 
       <AnswerFeedbackQueue />
+
+      <KnowledgeUsage />
 
       <div className="kb-rag-panel kb-eval-panel">
         <div className="kb-eval-bar">
