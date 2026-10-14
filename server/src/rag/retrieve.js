@@ -2,7 +2,8 @@
  * 父子块混合检索
  *
  * 向量路和关键词路都打在子块上，RRF 融合后按父块去重。
- * 送给模型和引用卡片的正文是父块；子块起止位置用来高亮命中片段。
+ * 送给模型和引用卡片的正文是父块里命中子块附近的一段；子块起止位置用来高亮。
+ * 库里的切块和向量不改。
  */
 
 import OpenAI from 'openai';
@@ -13,6 +14,7 @@ import { embedQuery, hasEmbeddingConfig } from '../services/embedding.service.js
 const RRF_K = 60;
 const RECALL_K = 20;
 const FRESHNESS_TAU_DAYS = 806;
+const PARENT_WINDOW = 1000;
 
 const chatClient = new OpenAI({
   apiKey: config.dashscope.apiKey,
@@ -223,6 +225,12 @@ function dedupeParents(hits) {
 
 function rowToHit(row, score) {
   const heading = row.parentHeading || row.heading || '';
+  const windowed = windowParentExcerpt(
+    row.parentContent || '',
+    row.charStart,
+    row.charEnd,
+    row.childContent || ''
+  );
   return {
     n: 0,
     parentId: row.parentId,
@@ -231,13 +239,55 @@ function rowToHit(row, score) {
     title: row.title,
     heading,
     category: row.category || '',
-    excerpt: row.parentContent || '',
+    excerpt: windowed.excerpt,
     childExcerpt: row.childContent || '',
-    highlightStart: Number(row.charStart) || 0,
-    highlightEnd: Number(row.charEnd) || 0,
+    highlightStart: windowed.highlightStart,
+    highlightEnd: windowed.highlightEnd,
     updatedAt: row.updatedAt,
     score: Number(Number(score).toFixed(4)),
   };
+}
+
+/**
+ * 短父块原样返回。超长父块只取命中子块附近大约 1000 字，高亮下标改到摘录内部。
+ * 不改库里的父块。子块本身长过窗口时，从子块开头取这一段。
+ */
+export function windowParentExcerpt(parentContent, charStart, charEnd, childContent = '') {
+  const parent = String(parentContent || '');
+  const span = locateChildSpan(parent, charStart, charEnd, childContent);
+  if (parent.length <= PARENT_WINDOW) {
+    return { excerpt: parent, highlightStart: span.start, highlightEnd: span.end };
+  }
+
+  const spanLength = span.end - span.start;
+  let from;
+  if (spanLength >= PARENT_WINDOW) {
+    from = span.start;
+  } else {
+    const before = Math.floor((PARENT_WINDOW - spanLength) / 2);
+    from = span.start - before;
+    if (from < 0) from = 0;
+    if (span.end > from + PARENT_WINDOW) from = span.end - PARENT_WINDOW;
+    if (from < 0) from = 0;
+    if (from + PARENT_WINDOW > parent.length) from = parent.length - PARENT_WINDOW;
+  }
+
+  const excerpt = parent.slice(from, from + PARENT_WINDOW);
+  const highlightStart = Math.max(0, span.start - from);
+  const highlightEnd = Math.min(excerpt.length, Math.max(highlightStart, span.end - from));
+  return { excerpt, highlightStart, highlightEnd };
+}
+
+function locateChildSpan(parent, charStart, charEnd, childContent) {
+  const start = Number(charStart) || 0;
+  const end = Number(charEnd) || 0;
+  if (end > start && start >= 0 && end <= parent.length) return { start, end };
+  const child = String(childContent || '');
+  if (child) {
+    const at = parent.indexOf(child);
+    if (at >= 0) return { start: at, end: at + child.length };
+  }
+  return { start: 0, end: Math.min(parent.length, PARENT_WINDOW) };
 }
 
 function toCitation(hit) {

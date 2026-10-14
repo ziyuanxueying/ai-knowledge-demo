@@ -163,6 +163,7 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
   const [ingestConfig, setIngestConfig] = useState({ cosConfigured: true, missing: [] });
   const [jobs, setJobs] = useState([]);
   const [reader, setReader] = useState(null);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const searchRef = useRef('');
   searchRef.current = search;
 
@@ -481,6 +482,32 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
         )}
       </div>
 
+      <section className="kb-tools">
+        <div className="kb-tools-bar">
+          <div className="kb-eval-copy">
+            <div className="kb-eval-heading">
+              <div className="kb-rag-title">检索与评测</div>
+              <span className="kb-rag-count">
+                子块 {kbStats.embedded}/{kbStats.total}
+                {kbStats.pending > 0 ? ` · 待向量化 ${kbStats.pending}` : ''}
+              </span>
+            </div>
+            <p className="kb-eval-desc">向量化、无用回答、文档用量、回归和检索对比。</p>
+          </div>
+          <button
+            type="button"
+            className={`kb-tools-toggle${toolsOpen ? ' is-open' : ''}`}
+            aria-expanded={toolsOpen}
+            aria-label={toolsOpen ? '收起检索与评测' : '展开检索与评测'}
+            onClick={() => setToolsOpen((open) => !open)}
+          >
+            <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+              <path d="M4.5 7 10 13 15.5 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+        {toolsOpen && (
+        <div className="kb-tools-body">
       {/* RAG：向量化状态条 */}
       <div className="kb-rag-bar">
         <div className="kb-rag-status">
@@ -707,6 +734,9 @@ export default function KnowledgeBase({ onBack, onOpenMenu }) {
           </div>
         )}
       </div>
+        </div>
+        )}
+      </section>
 
       <div className="kb-toolbar">
         <input

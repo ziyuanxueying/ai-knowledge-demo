@@ -1461,7 +1461,7 @@ body {
   margin-bottom: 4px;
 }
 
-.agent-step + .agent-step {
+.agent-step+.agent-step {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border-color);
@@ -1540,7 +1540,7 @@ body {
   font-size: 12px;
 }
 
-.agent-kb-hit + .agent-kb-hit {
+.agent-kb-hit+.agent-kb-hit {
   margin-top: 4px;
 }
 
@@ -1800,7 +1800,7 @@ body {
   padding: 16px 18px 24px;
 }
 
-.kb-feedback-section + .kb-feedback-section {
+.kb-feedback-section+.kb-feedback-section {
   margin-top: 16px;
 }
 
@@ -1828,7 +1828,7 @@ body {
   background: rgba(0, 0, 0, 0.02);
 }
 
-.kb-feedback-cite + .kb-feedback-cite {
+.kb-feedback-cite+.kb-feedback-cite {
   margin-top: 8px;
 }
 
@@ -1884,6 +1884,55 @@ body {
   font-size: 12px;
 }
 
+.kb-tools {
+  flex: none;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(16, 163, 127, 0.03);
+}
+
+.kb-tools-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+}
+
+.kb-tools-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.kb-tools-toggle svg {
+  display: block;
+  transition: transform 0.15s ease;
+}
+
+.kb-tools-toggle.is-open svg {
+  transform: rotate(180deg);
+}
+
+.kb-tools-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.kb-tools-body {
+  max-height: min(520px, 52vh);
+  overflow-y: auto;
+  border-top: 1px solid var(--border-color);
+}
+
 .kb-usage-missed {
   padding: 0 16px 14px;
 }
@@ -1910,6 +1959,11 @@ body {
 }
 
 @media (max-width: 720px) {
+  .kb-tools-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .kb-usage-title {
     max-width: 180px;
   }
@@ -2943,8 +2997,8 @@ body {
     white-space: nowrap;
   }
 
-  .param-panel-stat + .param-panel-stat,
-  .msg-preview-stat + .msg-preview-stat {
+  .param-panel-stat+.param-panel-stat,
+  .msg-preview-stat+.msg-preview-stat {
     display: none;
   }
 

@@ -20,6 +20,7 @@ export default function KnowledgeUsage() {
   const [cited, setCited] = useState([]);
   const [neverCited, setNeverCited] = useState([]);
   const [error, setError] = useState('');
+  const [open, setOpen] = useState(true);
   const [showMissed, setShowMissed] = useState(false);
 
   const load = useCallback(async () => {
@@ -50,16 +51,26 @@ export default function KnowledgeUsage() {
           </p>
         </div>
         <div className="kb-eval-actions">
+          {(cited.length > 0 || neverCited.length > 0) && (
+            <button
+              type="button"
+              className="kb-rag-btn"
+              aria-expanded={open}
+              onClick={() => setOpen((value) => !value)}
+            >
+              {open ? '收起列表' : '展开列表'}
+            </button>
+          )}
           <button type="button" className="kb-rag-btn" onClick={load}>
             刷新
           </button>
         </div>
       </div>
       {error && <div className="kb-eval-error">{error}</div>}
-      {!error && cited.length === 0 && (
+      {open && !error && cited.length === 0 && (
         <div className="kb-feedback-none">还没有带来源的回答。问一个知识库里的概念后，这里会按文档累计。</div>
       )}
-      {cited.length > 0 && (
+      {open && cited.length > 0 && (
         <div className="kb-usage-table-wrap">
           <table className="kb-usage-table">
             <thead>
@@ -86,7 +97,7 @@ export default function KnowledgeUsage() {
           </table>
         </div>
       )}
-      {!error && (
+      {open && !error && (
         <div className="kb-usage-missed">
           <button
             type="button"
